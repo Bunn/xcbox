@@ -10,9 +10,22 @@ Works for anything Xcode builds: **macOS, iOS, watchOS, tvOS, visionOS, and Swif
 
 ```bash
 cd ~/YourApp
-/path/to/xcbox/bin/xcbox        # brings up the sandbox and drops you in
+xcbox                           # brings up the sandbox and drops you in
 #   inside:  claude → /login → "build, test, and commit this app"
 ```
+
+## Install
+
+Put `xcbox` on your PATH (symlinks `bin/xcbox` into a bin dir already on your PATH):
+
+```bash
+./install.sh                 # auto-picks a writable dir on PATH
+./install.sh /usr/local/bin  # or install into a specific dir
+./install.sh --uninstall     # remove it
+```
+
+`xcbox` still runs from this repo (the symlink resolves back here), so `git pull` updates
+the installed command. Without installing, just run `bin/xcbox` directly.
 
 ## How it works
 

@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
-# xcbox — run a sandboxed coding agent on the iOS project in the current
+# xcbox — run a sandboxed coding agent on the Xcode/Swift project in the current
 # directory. The agent sees ONLY this project; it builds/tests on the host via
 # XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|status|stop|logs|rm|doctor]
 set -euo pipefail
 
-DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Resolve through symlinks so `xcbox` works when installed as a symlink on PATH
+# (xcbox-lib.sh lives next to the REAL script, not next to the symlink).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  dir=$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)
+  SOURCE=$(readlink "$SOURCE")
+  case $SOURCE in /*) ;; *) SOURCE="$dir/$SOURCE" ;; esac
+done
+DIR=$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)
 . "$DIR/xcbox-lib.sh"
 
 usage() {
   cat >&2 <<'EOF'
-xcbox — sandboxed iOS coding agent (project-only)
+xcbox — sandboxed coding agent for Xcode/Swift projects (project-only)
 
 Usage: xcbox [command]
 
