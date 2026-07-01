@@ -93,6 +93,54 @@ xcbox doctor                 # checks all of the above
 
 The agent's home — login and installed agent — persists in `~/.xcbox-home` across runs and boxes.
 
+## FAQ
+
+### Can I have multiple xcboxes running in parallel?
+
+Yes. Each project gets its own box, named `xcbox-<project-dir-name>`, so `cd`-ing into different
+projects and running `xcbox` gives you independent sandboxes that run side by side. They all share
+the **single** build gateway on `:8765`, which multiplexes their `xcodebuild` calls.
+
+One caveat: boxes are keyed by the project directory's **basename**, not its full path — so two
+different projects that happen to share the same folder name (e.g. two `MyApp` directories) would
+map to the same box. Rename one, or run one at a time.
+
+### Can I use any agent I want, like OpenCode, Codex, etc.?
+
+The box itself is agent-agnostic — it's a plain Linux (`node:22`) shell with the build gateway
+reachable at `http://192.168.64.1:8765/mcp`, so you can install and run whatever agent you like
+inside it.
+
+What's automated, though, is Claude Code specific: xcbox installs `@anthropic-ai/claude-code` by
+default and auto-registers the build server via `claude mcp add`. You can swap the installed package
+with `XCBOX_AGENT_INSTALL=<npm-package>`, but for a non-Claude agent you'll need to point it at the
+gateway MCP endpoint yourself — xcbox won't wire that up for you.
+
+### Is my host machine 100% protected?
+
+**No.** xcbox is a *blast-radius* tool, not a security boundary against a malicious agent. It limits
+what the agent can **see** (only your repo), but builds still execute your project's real build
+scripts on the host via `xcodebuild`, the container keeps network access, and the gateway on
+`:8765` has **no authentication**. Treat it as protection against mistakes, not against hostile
+code. See [Security model](#security-model) for the full picture.
+
+### Do my SSH keys or credentials end up in the container?
+
+No. Only the SSH **agent socket** is forwarded (`--ssh`), so the box can sign pushes as you without
+your private keys ever leaving the host. Your git identity (name/email) is copied in so commits are
+attributed correctly.
+
+### What happens to the box when I `exit`?
+
+Nothing — it keeps running in the background so the next `xcbox` is instant. Use `xcbox stop` to
+stop it, `xcbox stop --gateway` to also stop the shared gateway, or `xcbox rm` to delete the box
+(your agent login in `~/.xcbox-home` survives either way).
+
+### Why does it mount my whole repo instead of just the Xcode project folder?
+
+So `.git` comes along and the agent can commit and push — even when the `.xcodeproj` lives in a
+subdirectory of the repo. You still start in your project directory inside the box.
+
 ## Tests
 
 Standalone bash scripts, run directly:
