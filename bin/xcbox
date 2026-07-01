@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# xcbox — run a sandboxed coding agent on the iOS project in the current
+# directory. The agent sees ONLY this project; it builds/tests on the host via
+# XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|status|stop|logs|rm|doctor]
+set -euo pipefail
+
+DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$DIR/xcbox-lib.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+xcbox — sandboxed iOS coding agent (project-only)
+
+Usage: xcbox [command]
+
+Commands:
+  up        (default) bring up gateway + project sandbox and enter it
+  status    show gateway/box/agent/MCP state for this project
+  stop      stop this project's box (add --gateway to also stop the gateway)
+  logs      tail the build gateway log
+  rm        remove this project's box (keeps ~/.xcbox-home)
+  doctor    check host prerequisites
+  help      show this help
+EOF
+}
+
+cmd_up() {
+  local proj name mount_root
+  proj="${PROJECT:-$(pwd)}"
+  # 1. Looks like an iOS/Xcode project? (guard first — keeps routing cheap to test)
+  if ! is_ios_project "$proj"; then
+    echo "xcbox: no .xcodeproj/.xcworkspace/Package.swift in $proj — run me inside an iOS project." >&2
+    exit 1
+  fi
+  name=$(sanitize_name "$proj")
+  # Mount the git repo root (not just $proj) so .git is in the box and the agent
+  # can commit/push — the Xcode project often lives in a subdir of the repo.
+  mount_root=$(repo_mount_root "$proj")
+  # 2. Daemon + host build gateway.
+  if ! container ls >/dev/null 2>&1; then echo "==> starting container service"; container system start; fi
+  ensure_gateway
+  # 3. Project sandbox (mounts the repo root; box keyed to $proj) + provisioning.
+  ensure_box "$name" "$mount_root"
+  carry_git_identity "$name"
+  ensure_agent "$name"
+  register_mcp "$name"
+  # 4. Enter.
+  echo "==> entering '$name' (sandboxed to $mount_root; type 'exit' to leave; box keeps running)"
+  if [ "$mount_root" != "$proj" ]; then
+    echo "    (mounted the git repo root so commit/push work; you start at $proj)"
+  fi
+  echo "    first time: run 'claude', then /login. Then ask it to build/test the app."
+  exec container exec -it -w "$proj" -e PATH="$INNER_PATH" "$name" bash
+}
+
+_ok()   { echo "  OK   $1"; }
+_fail() { echo "  FAIL $1 — $2"; return 1; }
+
+_chk_arch() {
+  [ "$(uname -m)" = "arm64" ] && _ok "Apple Silicon" || _fail "Apple Silicon" "xcbox requires an Apple Silicon Mac"
+}
+_chk_macos() {
+  [ "$(uname -s)" = "Darwin" ] && _ok "macOS ($(sw_vers -productVersion 2>/dev/null))" || _fail "macOS" "xcbox runs on macOS only"
+}
+_chk_xcode() {
+  xcodebuild -version >/dev/null 2>&1 && _ok "Xcode ($(xcodebuild -version 2>/dev/null | head -1))" || _fail "Xcode" "install Xcode and run: sudo xcode-select -s /Applications/Xcode.app"
+}
+_chk_container() {
+  command -v container >/dev/null 2>&1 && _ok "container CLI ($(container --version 2>/dev/null | head -1))" || _fail "container CLI" "install Apple's container CLI"
+}
+_chk_git_identity() {
+  [ -n "$(git config --global user.name 2>/dev/null)" ] && [ -n "$(git config --global user.email 2>/dev/null)" ] \
+    && _ok "git identity ($(git config --global user.name))" \
+    || _fail "git identity" "set it: git config --global user.name '…' && git config --global user.email '…'"
+}
+_chk_ssh_agent() {
+  [ -n "${SSH_AUTH_SOCK:-}" ] && ssh-add -l >/dev/null 2>&1 && _ok "SSH agent (keys loaded)" \
+    || _fail "SSH agent" "start it and add a key: eval \"\$(ssh-agent)\" && ssh-add"
+}
+
+cmd_doctor() {
+  echo "xcbox doctor — host prerequisites:"
+  local rc=0
+  _chk_arch         || rc=1
+  _chk_macos        || rc=1
+  _chk_xcode        || rc=1
+  _chk_container    || rc=1
+  _chk_git_identity || rc=1
+  _chk_ssh_agent    || rc=1
+  [ "$rc" = 0 ] && echo "all good." || echo "some checks failed (see FAIL lines above)."
+  return "$rc"
+}
+
+cmd_status() {
+  local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
+  echo "xcbox status — $proj"
+  container ls >/dev/null 2>&1 && echo "  OK   container daemon running" || echo "  --   container daemon not running"
+  if gateway_up; then echo "  OK   build gateway serving on :$GATEWAY_PORT"
+  elif gateway_alive; then echo "  --   gateway pid alive but not answering yet"
+  else echo "  --   build gateway not running"; fi
+  if box_exists "$name"; then
+    box_running "$name" && echo "  OK   box '$name' running" || echo "  --   box '$name' exists (stopped)"
+    if box_running "$name"; then
+      container exec "$name" sh -c 'test -x /root/.npm-global/bin/claude' 2>/dev/null \
+        && echo "  OK   agent installed" || echo "  --   agent not installed"
+      container exec -e PATH="$INNER_PATH" "$name" sh -c 'claude mcp list 2>/dev/null | grep -q ios-build' 2>/dev/null \
+        && echo "  OK   ios-build MCP registered" || echo "  --   ios-build MCP not registered"
+    fi
+  else
+    echo "  --   no box for this project (run 'xcbox up')"
+  fi
+}
+
+cmd_logs() {
+  if [ -s "$XCBOX_HOME/gateway.log" ]; then
+    tail -n "${XCBOX_LOG_LINES:-50}" "$XCBOX_HOME/gateway.log"
+  else
+    echo "xcbox: no gateway log yet at $XCBOX_HOME/gateway.log"
+  fi
+}
+
+cmd_stop() {
+  local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
+  if box_running "$name"; then echo "==> stopping box '$name'"; container stop "$name" >/dev/null 2>&1 || true
+  else echo "xcbox: box '$name' not running"; fi
+  if [ "${1:-}" = "--gateway" ]; then
+    if gateway_alive; then
+      echo "==> stopping gateway (pid $(cat "$XCBOX_HOME/gateway.pid"))"
+      kill "$(cat "$XCBOX_HOME/gateway.pid")" 2>/dev/null || true
+      rm -f "$XCBOX_HOME/gateway.pid"
+    else echo "xcbox: gateway not running"; fi
+  fi
+}
+
+cmd_rm() {
+  local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
+  if box_exists "$name"; then
+    echo "==> removing box '$name'"
+    container stop "$name" >/dev/null 2>&1 || true
+    container rm "$name" >/dev/null 2>&1 || true
+  else echo "xcbox: no box '$name' to remove"; fi
+}
+
+main() {
+  local cmd="${1:-up}"; shift || true
+  case "$cmd" in
+    up)      cmd_up "$@" ;;
+    doctor)  cmd_doctor "$@" ;;
+    status)  cmd_status "$@" ;;
+    stop)    cmd_stop "$@" ;;
+    logs)    cmd_logs "$@" ;;
+    rm)      cmd_rm "$@" ;;
+    help|-h|--help) usage ;;
+    *)       echo "xcbox: unknown command '$cmd'" >&2; usage; exit 2 ;;
+  esac
+}
+main "$@"
