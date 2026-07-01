@@ -9,10 +9,6 @@
   The agent sees only your repo — yet it builds, tests, and runs on the host, and commits as you.
 </p>
 
-<p align="center">
-  macOS&nbsp;·&nbsp;iOS&nbsp;·&nbsp;watchOS&nbsp;·&nbsp;tvOS&nbsp;·&nbsp;visionOS&nbsp;·&nbsp;Swift packages
-</p>
-
 ---
 
 `xcbox` drops a coding agent (e.g. [Claude Code](https://www.claude.com/product/claude-code))
