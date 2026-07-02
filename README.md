@@ -17,6 +17,18 @@ machine is visible. The agent still builds and tests the real app **on the host*
 [XcodeBuildMCP](https://github.com/cameroncooke/XcodeBuildMCP), and commits & pushes with **your
 git identity over your forwarded SSH agent** — your keys never enter the container.
 
+## Why xcbox
+
+Let the agent run amok — build, test, commit — without babysitting. The safe way is a Linux
+sandbox scoped to your repo, so a mistake stays contained there and never reaches the rest of your host.
+
+The catch: **Xcode doesn't run on Linux.** `xcodebuild`, the simulators, the SDKs are all
+macOS-only, so a plain container can't compile an iOS or macOS app.
+
+xcbox squares that circle: the agent stays sandboxed in Linux and sees **only your repo**, while
+real builds are delegated to the host over a gateway — blast-radius protection *and* full-fidelity
+Apple builds.
+
 ## Highlights
 
 - **One command.** `cd` into any Xcode/Swift project and run `xcbox`.
