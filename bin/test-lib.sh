@@ -5,7 +5,7 @@ DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # --- explicit function-existence assertions (honest RED: undefined fns inside
 # `if` are masked and silently evaluate false, which would hide a missing fn) ---
-for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp gateway_alive repo_mount_root; do
+for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp gateway_alive gateway_bind_matches repo_mount_root gateway_bind_is_loopback container_host_bridge_configured ensure_container_gateway_route; do
   declare -F "$fn" >/dev/null || { echo "FAIL: $fn not defined"; exit 1; }
 done
 
@@ -25,8 +25,40 @@ rm -rf "$RT" "$NR"
 # --- box_exists is false for a bogus name (no match), and does not error ---
 if box_exists "xcbox-definitely-not-a-real-box-xyz"; then echo "FAIL: box_exists matched a bogus name"; exit 1; fi
 
+# --- safe gateway defaults + Apple container localhost DNS bridge detection ---
+gateway_bind_is_loopback || { echo "FAIL: default gateway bind is not loopback"; exit 1; }
+XCBOX_FORCE_LOOPBACK_PORT=18765 XCBOX_FORCE_LOOPBACK_HOST=127.0.0.1 \
+node -e '
+  const net = require("node:net");
+  net.Server.prototype.listen = (...args) => {
+    process.exit(args[0] === 18765 && args[1] === "127.0.0.1" ? 0 : 1);
+  };
+  require(process.argv[1]);
+  net.createServer().listen(18765, () => {});
+' "$DIR/force-loopback.cjs" || { echo "FAIL: gateway loopback preload did not force a loopback bind"; exit 1; }
+container() {
+  if [ "$*" = "system dns list" ]; then
+    printf 'DOMAIN\nhost.container.internal\n'
+    return 0
+  fi
+  return 1
+}
+container_host_bridge_configured || { echo "FAIL: configured localhost DNS bridge not detected"; exit 1; }
+ensure_container_gateway_route || { echo "FAIL: configured localhost DNS bridge rejected"; exit 1; }
+container() {
+  if [ "$*" = "system dns list" ]; then printf 'DOMAIN\n'; return 0; fi
+  return 1
+}
+if container_host_bridge_configured; then echo "FAIL: missing localhost DNS bridge accepted"; exit 1; fi
+if ensure_container_gateway_route >/dev/null 2>&1; then echo "FAIL: missing localhost DNS bridge route accepted"; exit 1; fi
+unset -f container
+
 # --- gateway_alive: false when pid file points at a dead process ---
 TMPHOME=$(mktemp -d); export XCBOX_HOME="$TMPHOME"
+printf '%s\n' "$GATEWAY_BIND_HOST:$GATEWAY_PORT" > "$XCBOX_HOME/gateway.bind"
+gateway_bind_matches || { echo "FAIL: recorded gateway bind not recognized"; exit 1; }
+printf '%s\n' "0.0.0.0:$GATEWAY_PORT" > "$XCBOX_HOME/gateway.bind"
+if gateway_bind_matches; then echo "FAIL: unsafe recorded gateway bind accepted"; exit 1; fi
 ( exit 0 ) & DEAD=$!; wait "$DEAD" 2>/dev/null || true
 echo "$DEAD" > "$XCBOX_HOME/gateway.pid"
 if gateway_alive; then echo "FAIL: gateway_alive true for dead pid $DEAD"; exit 1; fi
@@ -38,4 +70,4 @@ if ensure_gateway; then echo "FAIL: ensure_gateway returned success for a failin
 grep -q BOOMERR "$XCBOX_HOME/gateway.log" || { echo "FAIL: failed start left no diagnostic in gateway.log"; exit 1; }
 rm -rf "$TMPHOME"
 
-echo "lib OK: sanitize_name, box_exists, gateway_alive, ensure_gateway failure visibility"
+echo "lib OK: safe gateway route, sanitize_name, box_exists, gateway_alive, ensure_gateway failure visibility"

@@ -46,6 +46,7 @@ cmd_up() {
   mount_root=$(repo_mount_root "$proj")
   # 2. Daemon + host build gateway.
   if ! container ls >/dev/null 2>&1; then echo "==> starting container service"; container system start; fi
+  ensure_container_gateway_route
   ensure_gateway
   # 3. Project sandbox (mounts the repo root; box keyed to $proj) + provisioning.
   ensure_box "$name" "$mount_root"
@@ -76,6 +77,15 @@ _chk_xcode() {
 _chk_container() {
   command -v container >/dev/null 2>&1 && _ok "container CLI ($(container --version 2>/dev/null | head -1))" || _fail "container CLI" "install Apple's container CLI"
 }
+_chk_gateway_route() {
+  if ! gateway_bind_is_loopback; then
+    _fail "gateway route" "XCBOX_GATEWAY_BIND_HOST=$GATEWAY_BIND_HOST is not loopback-only"
+  elif container_host_bridge_configured; then
+    _ok "gateway route ($GATEWAY_HOST → host loopback)"
+  else
+    _fail "gateway route" "run: sudo container system dns create $GATEWAY_HOST --localhost $GATEWAY_LOCALHOST_IP"
+  fi
+}
 _chk_git_identity() {
   [ -n "$(git config --global user.name 2>/dev/null)" ] && [ -n "$(git config --global user.email 2>/dev/null)" ] \
     && _ok "git identity ($(git config --global user.name))" \
@@ -93,6 +103,7 @@ cmd_doctor() {
   _chk_macos        || rc=1
   _chk_xcode        || rc=1
   _chk_container    || rc=1
+  _chk_gateway_route || rc=1
   _chk_git_identity || rc=1
   _chk_ssh_agent    || rc=1
   [ "$rc" = 0 ] && echo "all good." || echo "some checks failed (see FAIL lines above)."
@@ -135,7 +146,7 @@ cmd_stop() {
     if gateway_alive; then
       echo "==> stopping gateway (pid $(cat "$XCBOX_HOME/gateway.pid"))"
       kill "$(cat "$XCBOX_HOME/gateway.pid")" 2>/dev/null || true
-      rm -f "$XCBOX_HOME/gateway.pid"
+      rm -f "$XCBOX_HOME/gateway.pid" "$XCBOX_HOME/gateway.bind"
     else echo "xcbox: gateway not running"; fi
   fi
 }

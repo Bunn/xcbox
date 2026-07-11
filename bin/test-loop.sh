@@ -76,6 +76,7 @@ echo "demo generated at $DEMO"
 
 # --- 2. Gateway + project-only box ---
 if ! container ls >/dev/null 2>&1; then container system start; fi
+ensure_container_gateway_route
 ensure_gateway
 ensure_box "$NAME" "$DEMO"
 
@@ -95,7 +96,7 @@ else
 fi
 
 # --- 5. Drive XcodeBuildMCP from INSIDE the box, over ONE real MCP session ---
-URL="http://192.168.64.1:$GATEWAY_PORT$MCP_ENDPOINT"
+URL="$GATEWAY_CONTAINER_URL"
 # box_mcp <callsJSON>: runs a JSON array of {method,params} in ONE session via
 # mcp-call.js (piped into the box's node); prints one result JSON per line.
 box_mcp() { container exec -i "$NAME" node - "$URL" "$1" < "$DIR/mcp-call.js"; }

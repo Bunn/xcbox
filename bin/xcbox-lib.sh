@@ -1,15 +1,57 @@
 # xcbox shared helpers. Source this; do not execute.
 # Values confirmed by the Task 1 spike:
+XCBOX_LIB_DIR=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 XCBOX_HOME="${XCBOX_HOME:-$HOME/.xcbox-home}"
 GATEWAY_PORT="${GATEWAY_PORT:-8765}"
 MCP_ENDPOINT="${MCP_ENDPOINT:-/mcp}"
-# GATEWAY_CMD: serve XcodeBuildMCP over streamable HTTP, bound to 0.0.0.0.
+# Keep the unauthenticated gateway off physical network interfaces. Apple
+# container's localhost DNS bridge makes this loopback listener reachable from
+# boxes as host.container.internal without exposing it to the LAN.
+GATEWAY_BIND_HOST="${XCBOX_GATEWAY_BIND_HOST:-127.0.0.1}"
+GATEWAY_HOST="${XCBOX_GATEWAY_HOST:-host.container.internal}"
+GATEWAY_LOCALHOST_IP="${XCBOX_GATEWAY_LOCALHOST_IP:-203.0.113.113}"
+GATEWAY_CONTAINER_URL="http://$GATEWAY_HOST:$GATEWAY_PORT$MCP_ENDPOINT"
+GATEWAY_LOOPBACK_PRELOAD="$XCBOX_LIB_DIR/force-loopback.cjs"
+# GATEWAY_CMD: serve XcodeBuildMCP over streamable HTTP.
 # --stateful is REQUIRED: the stateless streamableHttp bridge crashes a real MCP
 # client's multi-message session ("No connection established for request ID"),
 # taking the whole gateway down. Stateful mode keeps a per-client session so
 # responses route back correctly. (Found during the Phase 1 manual run.)
-GATEWAY_CMD_DEFAULT='npx -y supergateway --stdio "npx -y xcodebuildmcp@latest mcp" --outputTransport streamableHttp --stateful --healthEndpoint /healthz --port '"$GATEWAY_PORT"' --host 0.0.0.0'
+GATEWAY_CMD_DEFAULT='npx -y supergateway --stdio "npx -y xcodebuildmcp@latest mcp" --outputTransport streamableHttp --stateful --healthEndpoint /healthz --port '"$GATEWAY_PORT"
 GATEWAY_CMD="${GATEWAY_CMD:-$GATEWAY_CMD_DEFAULT}"
+
+gateway_bind_is_loopback() {
+  case "$GATEWAY_BIND_HOST" in
+    127.*|localhost|::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# True when Apple container has a DNS domain that forwards to host loopback.
+# `container system dns list` prints a DOMAIN header followed by domain names.
+container_host_bridge_configured() {
+  container system dns list 2>/dev/null | awk -v host="$GATEWAY_HOST" '
+    NR > 1 && $1 == host { found=1 }
+    END { exit(found ? 0 : 1) }
+  '
+}
+
+ensure_container_gateway_route() {
+  if ! gateway_bind_is_loopback; then
+    echo "WARNING: gateway bind override '$GATEWAY_BIND_HOST' may expose unauthenticated Xcode tools to the network." >&2
+    return 0
+  fi
+  if container_host_bridge_configured; then return 0; fi
+  cat >&2 <<EOF
+xcbox: the loopback-only build gateway is not reachable from containers yet.
+Configure Apple container's localhost DNS bridge once, then retry:
+
+  sudo container system dns create $GATEWAY_HOST --localhost $GATEWAY_LOCALHOST_IP
+
+The rule may need to be recreated after restarting Apple container or macOS.
+EOF
+  return 1
+}
 
 # True if DIR looks like an iOS/Xcode project (has any of: *.xcodeproj,
 # *.xcworkspace, Package.swift). Accepts if ANY is present.
@@ -54,16 +96,40 @@ gateway_alive() {
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+gateway_bind_matches() {
+  [ "$(cat "$XCBOX_HOME/gateway.bind" 2>/dev/null)" = "$GATEWAY_BIND_HOST:$GATEWAY_PORT" ]
+}
+
 ensure_gateway() {
+  local gateway_node_options="--require=$GATEWAY_LOOPBACK_PRELOAD"
+  if [ -n "${NODE_OPTIONS:-}" ]; then gateway_node_options="$gateway_node_options $NODE_OPTIONS"; fi
   mkdir -p "$XCBOX_HOME"
-  if gateway_up; then echo "==> build gateway already up on :$GATEWAY_PORT"; return 0; fi
+  if gateway_up; then
+    if gateway_bind_matches; then
+      echo "==> build gateway already up on $GATEWAY_BIND_HOST:$GATEWAY_PORT"
+      return 0
+    fi
+    cat >&2 <<EOF
+ERROR: a gateway is already answering on :$GATEWAY_PORT, but xcbox cannot verify
+that it uses the safe $GATEWAY_BIND_HOST bind. Stop the old gateway, then retry:
+
+  xcbox stop --gateway
+
+If it remains running, use: lsof -nP -iTCP:$GATEWAY_PORT -sTCP:LISTEN
+EOF
+    return 1
+  fi
   if [ -f "$XCBOX_HOME/gateway.pid" ] && ! gateway_alive; then
     echo "==> clearing stale gateway pid ($(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null))"
-    rm -f "$XCBOX_HOME/gateway.pid"
+    rm -f "$XCBOX_HOME/gateway.pid" "$XCBOX_HOME/gateway.bind"
   fi
   echo "==> starting build gateway (XcodeBuildMCP) on :$GATEWAY_PORT"
   : > "$XCBOX_HOME/gateway.log"
-  nohup sh -c "$GATEWAY_CMD" >>"$XCBOX_HOME/gateway.log" 2>&1 &
+  nohup env \
+    XCBOX_FORCE_LOOPBACK_PORT="$GATEWAY_PORT" \
+    XCBOX_FORCE_LOOPBACK_HOST="$GATEWAY_BIND_HOST" \
+    NODE_OPTIONS="$gateway_node_options" \
+    sh -c "$GATEWAY_CMD" >>"$XCBOX_HOME/gateway.log" 2>&1 &
   local gw_pid=$!
   local i
   for i in $(seq 1 60); do
@@ -74,6 +140,7 @@ ensure_gateway() {
     fi
     if gateway_up; then
       echo "$gw_pid" > "$XCBOX_HOME/gateway.pid"   # record only once confirmed listening
+      printf '%s\n' "$GATEWAY_BIND_HOST:$GATEWAY_PORT" > "$XCBOX_HOME/gateway.bind"
       echo "==> gateway ready"; return 0
     fi
     sleep 2
@@ -118,9 +185,9 @@ carry_git_identity() {
 
 register_mcp() {
   local name="$1"
-  container exec -e PATH="$INNER_PATH" "$name" sh -c '
+  container exec -e PATH="$INNER_PATH" -e XCBOX_MCP_URL="$GATEWAY_CONTAINER_URL" "$name" sh -c '
     claude mcp remove ios-build -s user >/dev/null 2>&1 || true
     claude mcp add --scope user --transport http ios-build \
-      http://192.168.64.1:'"$GATEWAY_PORT$MCP_ENDPOINT"' >/dev/null
+      "$XCBOX_MCP_URL" >/dev/null
   ' || echo "   (warning: could not register ios-build MCP — is the agent installed?)" >&2
 }

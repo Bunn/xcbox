@@ -73,7 +73,7 @@ Run `xcbox doctor` first if you want to check prerequisites. Full walkthrough:
 ```
 HOST (macOS)                                CONTAINER (Linux · repo-only)
   XcodeBuildMCP behind a stateful             your agent (e.g. Claude Code)
-  HTTP gateway on :8765  ◄───────────────────  connects over 192.168.64.1:8765
+  loopback gateway on :8765  ◄────────────────  host.container.internal:8765
   Xcode toolchain (xcodebuild / simctl)       sees ONLY your git repo + its own home
   your git identity + forwarded SSH agent     commits as you; keys stay on the host
 ```
@@ -86,11 +86,15 @@ host and the results stream back over the gateway.
 ## Requirements
 
 Apple Silicon · macOS 26+ · Xcode 26+ · Apple [`container`](https://github.com/apple/container)
-CLI · a global git identity · an SSH agent with a key loaded.
+CLI · a global git identity · an SSH agent with a key loaded · Apple container's localhost DNS bridge.
 
 ```bash
-xcbox doctor                 # checks all of the above
+sudo container system dns create host.container.internal --localhost 203.0.113.113
+xcbox doctor                 # checks all of the above, including the bridge
 ```
+
+The DNS bridge lets boxes reach a host service bound only to `127.0.0.1`. Apple container may
+remove the rule after a restart; `xcbox doctor` and `xcbox up` report the command to recreate it.
 
 ## Commands
 
@@ -120,7 +124,7 @@ map to the same box. Rename one, or run one at a time.
 ### Can I use any agent I want, like OpenCode, Codex, etc.?
 
 The box itself is agent-agnostic — it's a plain Linux (`node:22`) shell with the build gateway
-reachable at `http://192.168.64.1:8765/mcp`, so you can install and run whatever agent you like
+reachable at `http://host.container.internal:8765/mcp`, so you can install and run whatever agent you like
 inside it.
 
 What's automated, though, is Claude Code specific: xcbox installs `@anthropic-ai/claude-code` by
@@ -133,8 +137,9 @@ gateway MCP endpoint yourself — xcbox won't wire that up for you.
 **No.** xcbox is a *blast-radius* tool, not a security boundary against a malicious agent. It limits
 what the agent can **see** (only your repo), but builds still execute your project's real build
 scripts on the host via `xcodebuild`, the container keeps network access, and the gateway on
-`:8765` has **no authentication**. Treat it as protection against mistakes, not against hostile
-code. See [Security model](#security-model) for the full picture.
+`:8765` has **no authentication**. The gateway is loopback-only, but any local process or container
+using the configured localhost bridge can reach it. Treat xcbox as protection against mistakes,
+not against hostile code. See [Security model](#security-model) for the full picture.
 
 ### Do my SSH keys or credentials end up in the container?
 
@@ -168,5 +173,6 @@ bin/test-loop.sh             # full end-to-end: generate a throwaway app → bui
 **Trusted-agent.** The sandbox isolates the agent's *filesystem* to your repository — it guards
 against mistakes and blast radius, not a malicious agent. Builds still run your project's build
 scripts on the host via `xcodebuild`, and the container keeps network access (it must reach the
-gateway). The gateway binds a host-only network with **no authentication**, so don't run `xcbox` on
-a shared or multi-user machine without a firewall rule restricting port `8765`.
+gateway). The unauthenticated gateway binds only to host loopback and boxes reach it through Apple
+container's localhost DNS bridge. Other local processes and containers using that bridge can still
+reach it, so xcbox remains a trusted-agent tool rather than a boundary against hostile code.

@@ -5,9 +5,17 @@ builds/tests on the host via XcodeBuildMCP.
 
 ## Prerequisites
 
-Run `bin/xcbox doctor` — it checks Apple Silicon, macOS, Xcode, the `container`
+Configure Apple container's localhost DNS bridge, then run `bin/xcbox doctor`:
+
+```bash
+sudo container system dns create host.container.internal --localhost 203.0.113.113
+bin/xcbox doctor
+```
+
+The bridge lets the sandbox reach the build gateway while it remains bound only
+to host loopback. Doctor also checks Apple Silicon, macOS, Xcode, the `container`
 CLI, your git identity, and an SSH agent with a key. Fix any `FAIL` line before
-continuing.
+continuing. The bridge rule may need to be recreated after a restart.
 
 ## First run
 
