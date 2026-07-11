@@ -35,7 +35,7 @@ Apple builds.
 - **One command.** Run `xcbox` from an Xcode/Swift project or a repo containing one.
 - **Project-scoped sandbox.** The agent's filesystem is limited to your repo; the rest of the host stays invisible.
 - **Real host builds.** `xcodebuild` and simulators run on macOS through XcodeBuildMCP — full fidelity, no toolchain shipped in the container.
-- **Commits as you.** Uses your host git identity and forwarded SSH agent; private keys stay on the host.
+- **Commits as you.** Uses your host Git identity and forwarded SSH agent, including SSH commit signing; private keys stay on the host.
 - **Every Apple platform**, plus Swift packages — because XcodeBuildMCP drives them all.
 
 ## Install
@@ -149,7 +149,9 @@ left untouched and used only to seed login/preferences into the replacement.
 
 For a running box, `xcbox status` checks the complete operational path: an in-container gateway
 health request, a bounded stateful MCP `tools/list` session, and `ssh-add -l` through the forwarded
-socket. Failures include the relevant restart, DNS bridge, log, SSH-agent, or box-recreation command.
+socket. If the host requires SSH-signed commits, it also checks that the selected public key matches
+an identity in the forwarded agent. Failures include the relevant restart, DNS bridge, log,
+SSH-agent, or box-recreation command.
 
 ## FAQ
 
@@ -193,9 +195,11 @@ not against hostile code. See [Security model](#security-model) for the full pic
 
 ### Do my SSH keys or credentials end up in the container?
 
-No. Only the SSH **agent socket** is forwarded (`--ssh`), so the box can sign pushes as you without
-your private keys ever leaving the host. Your git identity (name/email) is copied in so commits are
-attributed correctly.
+Private keys do not. Only the SSH **agent socket** is forwarded (`--ssh`), so the box can authenticate
+and sign without private key material leaving the host. Your Git identity is copied in. When the host
+uses SSH commit signing, xcbox also copies only the selected public key into that project's isolated
+home and mirrors `gpg.format`, `commit.gpgSign`, `tag.gpgSign`, and `user.signingKey`. Setup fails
+rather than silently producing unsigned commits when a required signing identity is unavailable.
 
 ### What happens to the box when I `exit`?
 
@@ -227,6 +231,8 @@ bin/test-doctor.sh
 bin/test-subcommands.sh
 bin/test-runtime.sh          # locked install detection + offline reuse + lock refresh
 bin/test-agents-container.sh # real throwaway Apple container: install/wire both agents
+bin/test-git-signing.sh      # SSH signing config + safety/diagnostic unit coverage
+bin/test-git-signing-container.sh # real signed commit through a forwarded throwaway agent
 bin/test-gateway.sh          # starts the gateway; verifies a real MCP session
 bin/test-gateway-lifecycle.sh # isolated start → stop → restart lifecycle regression
 bin/test-loop.sh             # full end-to-end: generate a throwaway app → build + test through the sandbox

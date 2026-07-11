@@ -23,6 +23,7 @@ for test in \
   test-project-identity.sh \
   test-box-home.sh \
   test-agents.sh \
+  test-git-signing.sh \
   test-list.sh \
   test-logs.sh \
   test-status-probes.sh \

@@ -51,7 +51,7 @@ your forwarded SSH agent — as your git identity, with keys that never enter th
 ## Lifecycle
 
 ```bash
-xcbox status            # verify host + box gateway, MCP tools, agent, and SSH forwarding
+xcbox status            # verify gateway, MCP, agent, SSH forwarding, and SSH commit signing
 xcbox list              # inventory every box and retained project home
 xcbox logs              # tail the gateway log (-f follows; --lines N controls history)
 xcbox stop              # stop this project's box

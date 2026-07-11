@@ -530,6 +530,56 @@ box_ssh_agent_ready() {
   ' >/dev/null 2>&1
 }
 
+host_git_config_get() {
+  local project="${1:-}" key="$2"
+  if [ -n "$project" ]; then
+    git -C "$project" config --get "$key" 2>/dev/null
+  else
+    git config --global --get "$key" 2>/dev/null
+  fi
+}
+
+host_git_config_bool() {
+  local project="${1:-}" key="$2"
+  if [ -n "$project" ]; then
+    git -C "$project" config --bool --get "$key" 2>/dev/null
+  else
+    git config --global --bool --get "$key" 2>/dev/null
+  fi
+}
+
+host_ssh_commit_signing_enabled() {
+  local project="${1:-}"
+  [ "$(host_git_config_get "$project" gpg.format || true)" = ssh ] \
+    && [ "$(host_git_config_bool "$project" commit.gpgsign || true)" = true ]
+}
+
+box_git_signing_ready() {
+  local name="$1"
+  container exec "$name" sh -c '
+    test "$(git config --global --get gpg.format 2>/dev/null)" = ssh || exit 1
+    test "$(git config --global --bool --get commit.gpgsign 2>/dev/null)" = true || exit 1
+    test -n "${SSH_AUTH_SOCK:-}" && test -S "$SSH_AUTH_SOCK" || exit 1
+    key=$(git config --global --get user.signingkey 2>/dev/null || true)
+    if [ -z "$key" ]; then
+      test "$(git config --global --get gpg.ssh.defaultKeyCommand 2>/dev/null)" = "ssh-add -L" || exit 1
+      ssh-add -L 2>/dev/null | grep -q .
+      exit
+    fi
+    case "$key" in
+      key::*) public=${key#key::} ;;
+      /root/.config/xcbox/signing-key.pub)
+        test -f "$key" && test ! -L "$key" || exit 1
+        IFS= read -r public < "$key"
+        ;;
+      *) exit 1 ;;
+    esac
+    identity=$(printf "%s\n" "$public" | awk "NF >= 2 { print \$1 \" \" \$2; exit }")
+    test -n "$identity" || exit 1
+    ssh-add -L 2>/dev/null | awk "NF >= 2 { print \$1 \" \" \$2 }" | grep -Fqx "$identity"
+  ' >/dev/null 2>&1
+}
+
 box_home_dir() {
   case "$1" in ''|*/*|.|..) return 1 ;; esac
   printf '%s/%s\n' "$XCBOX_BOX_HOME_ROOT" "$1"
@@ -858,12 +908,87 @@ agent_mcp_registered() {
   container exec "$name" "/root/.npm-global/bin/$binary" mcp list 2>/dev/null | grep -q 'ios-build'
 }
 
+prepare_box_ssh_signing_key() {
+  local name="$1" configured="$2" project="${3:-}" home source public directory destination root tmp
+  case "$configured" in
+    key::ssh-*|key::ecdsa-*|key::sk-*) printf '%s\n' "$configured"; return 0 ;;
+    ssh-*|ecdsa-*|sk-*) printf 'key::%s\n' "$configured"; return 0 ;;
+    \~/*) source="$HOME/${configured#\~/}" ;;
+    /*) source="$configured" ;;
+    *) [ -n "$project" ] && source="$project/$configured" || {
+      echo "ERROR: relative SSH signing-key path '$configured' has no project context." >&2
+      return 1
+    } ;;
+  esac
+  [ -f "$source" ] || {
+    echo "ERROR: SSH signing public key is unavailable at $source; private keys are never copied." >&2
+    return 1
+  }
+  IFS= read -r public < "$source" || true
+  case "$public" in ssh-*|ecdsa-*|sk-*) ;; *)
+    echo "ERROR: refusing to copy non-public SSH key data from $source." >&2
+    return 1
+  esac
+
+  home=$(box_home_dir "$name") || return 1
+  root=$(canonical_path "$home") || return 1
+  directory="$home/.config/xcbox"
+  if [ -L "$home/.config" ] || { [ -e "$home/.config" ] && [ ! -d "$home/.config" ]; } \
+    || [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
+    echo "ERROR: refusing unsafe signing-key destination under $home." >&2
+    return 1
+  fi
+  mkdir -p "$directory"
+  [ "$(canonical_path "$home")" = "$root" ] || return 1
+  destination="$directory/signing-key.pub"
+  if [ -L "$destination" ] || { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
+    echo "ERROR: refusing unsafe signing-key file $destination." >&2
+    return 1
+  fi
+  tmp=$(mktemp "$directory/.signing-key.XXXXXX") || return 1
+  if ! printf '%s\n' "$public" > "$tmp"; then rm -f "$tmp"; return 1; fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$destination"
+  printf '/root/.config/xcbox/signing-key.pub\n'
+}
+
 carry_git_identity() {
-  local name="$1" gn ge
-  gn=$(git config --global user.name 2>/dev/null || true)
-  ge=$(git config --global user.email 2>/dev/null || true)
+  local name="$1" project="${2:-}" gn ge format commit_sign tag_sign signing_key box_signing_key default_key_command key
+  gn=$(host_git_config_get "$project" user.name || true)
+  ge=$(host_git_config_get "$project" user.email || true)
   [ -n "$gn" ] && container exec "$name" git config --global user.name  "$gn"  || true
   [ -n "$ge" ] && container exec "$name" git config --global user.email "$ge" || true
+
+  # Mirror only SSH signing. OpenPGP/X.509 private-key agents are not forwarded,
+  # and xcbox never copies private key material into a box.
+  for key in gpg.format commit.gpgsign tag.gpgsign user.signingkey gpg.ssh.defaultKeyCommand; do
+    container exec "$name" git config --global --unset-all "$key" >/dev/null 2>&1 || true
+  done
+  format=$(host_git_config_get "$project" gpg.format || true)
+  [ "$format" = ssh ] || return 0
+
+  container exec "$name" git config --global gpg.format ssh
+  commit_sign=$(host_git_config_bool "$project" commit.gpgsign || true)
+  tag_sign=$(host_git_config_bool "$project" tag.gpgsign || true)
+  [ -n "$commit_sign" ] && container exec "$name" git config --global commit.gpgsign "$commit_sign"
+  [ -n "$tag_sign" ] && container exec "$name" git config --global tag.gpgsign "$tag_sign"
+
+  signing_key=$(host_git_config_get "$project" user.signingkey || true)
+  default_key_command=$(host_git_config_get "$project" gpg.ssh.defaultKeyCommand || true)
+  if [ -n "$signing_key" ]; then
+    box_signing_key=$(prepare_box_ssh_signing_key "$name" "$signing_key" "$project") || return 1
+    container exec "$name" git config --global user.signingkey "$box_signing_key"
+  elif [ -n "$default_key_command" ] || [ "$commit_sign" = true ]; then
+    # Do not import arbitrary host commands. Git documents ssh-add -L as the
+    # agent-backed default; it uses the first forwarded identity.
+    container exec "$name" git config --global gpg.ssh.defaultKeyCommand 'ssh-add -L'
+  fi
+
+  if [ "$commit_sign" = true ] && ! box_git_signing_ready "$name"; then
+    echo "ERROR: host requires SSH-signed commits, but the selected signing key is not available through the forwarded SSH agent." >&2
+    echo "       Run host 'ssh-add' and retry; after a reboot, recreate a stale socket with 'xcbox rm' then 'xcbox'." >&2
+    return 1
+  fi
 }
 
 register_mcp() {

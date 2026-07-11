@@ -69,7 +69,7 @@ cmd_up() {
   ensure_gateway
   # 3. Project sandbox (mounts the repo root; box keyed to $proj) + provisioning.
   ensure_box "$name" "$mount_root" "$proj"
-  carry_git_identity "$name"
+  carry_git_identity "$name" "$proj"
   ensure_agent "$name" "$agent" "$update"
   register_mcp "$name" "$agent"
   record_box_agent "$name" "$agent"
@@ -203,6 +203,11 @@ cmd_status() {
       box_ssh_agent_ready "$name" \
         && echo "  OK   forwarded SSH agent has an identity" \
         || echo "  FAIL forwarded SSH agent unavailable/empty — run host 'ssh-add', then 'xcbox rm' and 'xcbox up'"
+      if host_ssh_commit_signing_enabled "$proj"; then
+        box_git_signing_ready "$name" \
+          && echo "  OK   SSH commit signing uses a forwarded agent identity" \
+          || echo "  FAIL SSH commit signing unavailable — run host 'ssh-add'; if the socket is stale, run 'xcbox rm' then 'xcbox'"
+      fi
     fi
   else
     echo "  --   no box for this project (run 'xcbox up')"
