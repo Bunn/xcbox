@@ -118,7 +118,7 @@ echo "discover OK: XcodeBuildMCP discovered the demo from inside the box"
 # 5c. build_sim + test_sim — the build/test round-trip (criterion #2).
 # RECONCILED AGAINST THE LIVE SCHEMA (step 5a, XcodeBuildMCP 2.6.2):
 #   - build_sim/test_sim take NO direct projectPath/scheme/simulator args — those are set
-#     via session_set_defaults. The gateway runs supergateway --stateful, so we run
+#     via session_set_defaults. The gateway is stateful, so we run
 #     session_set_defaults -> build_sim -> test_sim in ONE MCP session (mcp-call.js opens a
 #     single session for the whole array): the in-memory defaults from the first call carry
 #     to the build/test calls, exactly as the real agent's MCP client sees them. No

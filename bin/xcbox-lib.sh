@@ -1,6 +1,7 @@
 # xcbox shared helpers. Source this; do not execute.
 # Values confirmed by the Task 1 spike:
 XCBOX_LIB_DIR=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
+XCBOX_ROOT="${XCBOX_RUNTIME_ROOT:-$(cd -P "$XCBOX_LIB_DIR/.." >/dev/null 2>&1 && pwd)}"
 XCBOX_HOME="${XCBOX_HOME:-$HOME/.xcbox-home}"
 GATEWAY_PORT="${GATEWAY_PORT:-8765}"
 MCP_ENDPOINT="${MCP_ENDPOINT:-/mcp}"
@@ -11,17 +12,102 @@ GATEWAY_BIND_HOST="${XCBOX_GATEWAY_BIND_HOST:-127.0.0.1}"
 GATEWAY_HOST="${XCBOX_GATEWAY_HOST:-host.container.internal}"
 GATEWAY_LOCALHOST_IP="${XCBOX_GATEWAY_LOCALHOST_IP:-203.0.113.113}"
 GATEWAY_CONTAINER_URL="http://$GATEWAY_HOST:$GATEWAY_PORT$MCP_ENDPOINT"
-GATEWAY_LOOPBACK_PRELOAD="$XCBOX_LIB_DIR/force-loopback.cjs"
-GATEWAY_PROCESS_PATTERN="${XCBOX_GATEWAY_PROCESS_PATTERN:-supergateway}"
+GATEWAY_SCRIPT="$XCBOX_LIB_DIR/xcbox-gateway.mjs"
+GATEWAY_PROCESS_PATTERN="${XCBOX_GATEWAY_PROCESS_PATTERN:-xcbox-gateway.mjs}"
 GATEWAY_START_ATTEMPTS="${XCBOX_GATEWAY_START_ATTEMPTS:-60}"
 GATEWAY_START_DELAY="${XCBOX_GATEWAY_START_DELAY:-2}"
-# GATEWAY_CMD: serve XcodeBuildMCP over streamable HTTP.
-# --stateful is REQUIRED: the stateless streamableHttp bridge crashes a real MCP
-# client's multi-message session ("No connection established for request ID"),
-# taking the whole gateway down. Stateful mode keeps a per-client session so
-# responses route back correctly. (Found during the Phase 1 manual run.)
-GATEWAY_CMD_DEFAULT='npx -y supergateway --stdio "npx -y xcodebuildmcp@latest mcp" --outputTransport streamableHttp --stateful --healthEndpoint /healthz --port '"$GATEWAY_PORT"
+RUNTIME_LOCKFILE="$XCBOX_ROOT/package-lock.json"
+RUNTIME_STAMP="$XCBOX_ROOT/node_modules/.xcbox-lock-sha256"
+XCODEBUILDMCP_BIN="$XCBOX_ROOT/node_modules/.bin/xcodebuildmcp"
+# xcbox-gateway owns the stateful HTTP transport and launches one stdio
+# XcodeBuildMCP child per MCP session.
+GATEWAY_CMD_DEFAULT='"$XCBOX_NODE_BIN" "$XCBOX_GATEWAY_SCRIPT"'
 GATEWAY_CMD="${GATEWAY_CMD:-$GATEWAY_CMD_DEFAULT}"
+
+runtime_lock_hash() {
+  [ -f "$RUNTIME_LOCKFILE" ] || return 1
+  shasum -a 256 "$RUNTIME_LOCKFILE" 2>/dev/null | awk '{print $1}'
+}
+
+node_supported() {
+  command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' 2>/dev/null
+}
+
+runtime_locked_package_version() {
+  local package_name="$1"
+  node -e '
+    const fs = require("node:fs");
+    const lock = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const entry = lock.packages?.[`node_modules/${process.argv[2]}`];
+    if (!entry?.version) process.exit(1);
+    process.stdout.write(entry.version);
+  ' "$RUNTIME_LOCKFILE" "$package_name" 2>/dev/null
+}
+
+runtime_package_version() {
+  local package_name="$1"
+  node -e '
+    const fs = require("node:fs");
+    const packagePath = process.argv[1];
+    process.stdout.write(JSON.parse(fs.readFileSync(packagePath, "utf8")).version);
+  ' "$XCBOX_ROOT/node_modules/$package_name/package.json" 2>/dev/null
+}
+
+runtime_ready() {
+  local expected installed
+  expected=$(runtime_lock_hash) || return 1
+  installed=$(cat "$RUNTIME_STAMP" 2>/dev/null) || return 1
+  [ "$installed" = "$expected" ] &&
+    [ -x "$XCODEBUILDMCP_BIN" ] &&
+    [ -r "$GATEWAY_SCRIPT" ] &&
+    [ "$(runtime_package_version @modelcontextprotocol/sdk)" = "$(runtime_locked_package_version @modelcontextprotocol/sdk)" ] &&
+    [ "$(runtime_package_version xcodebuildmcp)" = "$(runtime_locked_package_version xcodebuildmcp)" ]
+}
+
+ensure_runtime() {
+  local install_lock="$XCBOX_HOME/runtime-install.lock" acquired="" expected i lock_pid
+  runtime_ready && return 0
+  node_supported || { echo "ERROR: Node.js 20+ is required to install the gateway runtime." >&2; return 1; }
+  command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install the gateway runtime." >&2; return 1; }
+  mkdir -p "$XCBOX_HOME"
+
+  for i in $(seq 1 120); do
+    if mkdir "$install_lock" 2>/dev/null; then acquired=1; break; fi
+    runtime_ready && return 0
+    lock_pid=$(cat "$install_lock/pid" 2>/dev/null || true)
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -f "$install_lock/pid"
+      rmdir "$install_lock" 2>/dev/null || true
+      continue
+    fi
+    sleep 0.5
+  done
+  if [ -z "$acquired" ]; then
+    echo "ERROR: timed out waiting for another xcbox runtime installation; remove $install_lock if it is stale." >&2
+    return 1
+  fi
+  printf '%s\n' "$$" > "$install_lock/pid"
+
+  echo "==> installing pinned gateway runtime from package-lock.json"
+  if ! npm --prefix "$XCBOX_ROOT" ci --omit=dev; then
+    rm -f "$install_lock/pid"; rmdir "$install_lock" 2>/dev/null || true
+    echo "ERROR: could not install the pinned gateway runtime." >&2
+    return 1
+  fi
+  expected=$(runtime_lock_hash) || {
+    rm -f "$install_lock/pid"; rmdir "$install_lock" 2>/dev/null || true
+    echo "ERROR: could not fingerprint package-lock.json." >&2
+    return 1
+  }
+  printf '%s\n' "$expected" > "$RUNTIME_STAMP"
+  rm -f "$install_lock/pid"; rmdir "$install_lock" 2>/dev/null || true
+
+  if ! runtime_ready; then
+    echo "ERROR: npm ci completed but the pinned gateway binaries are unavailable." >&2
+    return 1
+  fi
+  echo "==> gateway runtime ready (built-in bridge, MCP SDK $(runtime_package_version @modelcontextprotocol/sdk), xcodebuildmcp $(runtime_package_version xcodebuildmcp))"
+}
 
 gateway_bind_is_loopback() {
   case "$GATEWAY_BIND_HOST" in
@@ -81,7 +167,7 @@ repo_mount_root() {
   git -C "$1" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$1"
 }
 
-# Liveness check via supergateway's --healthEndpoint (returns "ok"). We do NOT
+# Liveness check via xcbox-gateway's health endpoint (returns "ok"). We do NOT
 # probe an MCP method here: the gateway runs --stateful, where a sessionless
 # request is rejected and an initialize would leak a session per call.
 gateway_up() {
@@ -215,8 +301,7 @@ stop_gateway() {
 }
 
 ensure_gateway() {
-  local gateway_node_options="--require=$GATEWAY_LOOPBACK_PRELOAD" launcher_pid listener_pid old_pid
-  if [ -n "${NODE_OPTIONS:-}" ]; then gateway_node_options="$gateway_node_options $NODE_OPTIONS"; fi
+  local launcher_pid listener_pid old_pid node_bin
   mkdir -p "$XCBOX_HOME"
   if gateway_up; then
     listener_pid=$(gateway_listener_pid 2>/dev/null || true)
@@ -243,12 +328,18 @@ EOF
     echo "==> clearing stale gateway pid ($(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null))"
     clear_gateway_metadata
   fi
+  if [ "$GATEWAY_CMD" = "$GATEWAY_CMD_DEFAULT" ]; then ensure_runtime || return 1; fi
   echo "==> starting build gateway (XcodeBuildMCP) on $GATEWAY_BIND_HOST:$GATEWAY_PORT"
   : > "$XCBOX_HOME/gateway.log"
+  node_bin=$(command -v node)
   nohup env \
-    XCBOX_FORCE_LOOPBACK_PORT="$GATEWAY_PORT" \
-    XCBOX_FORCE_LOOPBACK_HOST="$GATEWAY_BIND_HOST" \
-    NODE_OPTIONS="$gateway_node_options" \
+    XCBOX_NODE_BIN="$node_bin" \
+    XCBOX_GATEWAY_SCRIPT="$GATEWAY_SCRIPT" \
+    XCBOX_XCODEBUILDMCP_BIN="$XCODEBUILDMCP_BIN" \
+    GATEWAY_PORT="$GATEWAY_PORT" \
+    GATEWAY_BIND_HOST="$GATEWAY_BIND_HOST" \
+    GATEWAY_HOST="$GATEWAY_HOST" \
+    MCP_ENDPOINT="$MCP_ENDPOINT" \
     sh -c "exec $GATEWAY_CMD" >>"$XCBOX_HOME/gateway.log" 2>&1 &
   launcher_pid=$!
   printf '%s\n' "$launcher_pid" > "$XCBOX_HOME/gateway.launcher.pid"

@@ -1,0 +1,13 @@
+{
+  "name": "xcbox-host-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pinned host-side gateway runtime for xcbox",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.27.1",
+    "xcodebuildmcp": "2.6.2"
+  }
+}

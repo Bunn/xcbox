@@ -8,7 +8,7 @@ export GATEWAY_PORT="${XCBOX_TEST_GATEWAY_PORT:-18766}"
 export XCBOX_GATEWAY_PROCESS_PATTERN=xcbox-lifecycle-gateway
 . "$DIR/xcbox-lib.sh"
 
-GATEWAY_CMD="node -e 'const http=require(\"node:http\"); http.createServer((req,res)=>res.end(req.url===\"/healthz\"?\"ok\":\"not found\")).listen($GATEWAY_PORT)' xcbox-lifecycle-gateway"
+GATEWAY_CMD="node -e 'const http=require(\"node:http\"); http.createServer((req,res)=>res.end(req.url===\"/healthz\"?\"ok\":\"not found\")).listen($GATEWAY_PORT,\"127.0.0.1\")' xcbox-lifecycle-gateway"
 
 cleanup() {
   stop_gateway >/dev/null 2>&1 || true

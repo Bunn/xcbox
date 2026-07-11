@@ -13,9 +13,14 @@ bin/xcbox doctor
 ```
 
 The bridge lets the sandbox reach the build gateway while it remains bound only
-to host loopback. Doctor also checks Apple Silicon, macOS, Xcode, the `container`
+to host loopback. Doctor also checks Apple Silicon, macOS, Xcode, Node.js 20+, the `container`
 CLI, your git identity, and an SSH agent with a key. Fix any `FAIL` line before
 continuing. The bridge rule may need to be recreated after a restart.
+
+On first use, xcbox runs `npm ci` to install the exact MCP SDK and XcodeBuildMCP
+versions in the repository's `package-lock.json`. The stateful HTTP bridge itself
+ships with xcbox. It reuses the locked runtime—including offline—and reinstalls
+only when the lockfile changes.
 
 ## First run
 

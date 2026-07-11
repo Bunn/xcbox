@@ -74,6 +74,11 @@ _chk_macos() {
 _chk_xcode() {
   xcodebuild -version >/dev/null 2>&1 && _ok "Xcode ($(xcodebuild -version 2>/dev/null | head -1))" || _fail "Xcode" "install Xcode and run: sudo xcode-select -s /Applications/Xcode.app"
 }
+_chk_node_npm() {
+  node_supported && command -v npm >/dev/null 2>&1 \
+    && _ok "Node/npm ($(node --version 2>/dev/null) / npm $(npm --version 2>/dev/null))" \
+    || _fail "Node/npm" "install Node.js 20 or newer"
+}
 _chk_container() {
   command -v container >/dev/null 2>&1 && _ok "container CLI ($(container --version 2>/dev/null | head -1))" || _fail "container CLI" "install Apple's container CLI"
 }
@@ -102,6 +107,7 @@ cmd_doctor() {
   _chk_arch         || rc=1
   _chk_macos        || rc=1
   _chk_xcode        || rc=1
+  _chk_node_npm     || rc=1
   _chk_container    || rc=1
   _chk_gateway_route || rc=1
   _chk_git_identity || rc=1
@@ -114,6 +120,11 @@ cmd_status() {
   local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
   echo "xcbox status — $proj"
   container ls >/dev/null 2>&1 && echo "  OK   container daemon running" || echo "  --   container daemon not running"
+  if runtime_ready; then
+    echo "  OK   gateway runtime: built-in bridge, MCP SDK $(runtime_package_version @modelcontextprotocol/sdk), xcodebuildmcp $(runtime_package_version xcodebuildmcp) (locked)"
+  else
+    echo "  --   gateway runtime missing/outdated (next 'xcbox up' runs npm ci)"
+  fi
   if gateway_up && gateway_alive && gateway_bind_matches; then echo "  OK   build gateway serving on $GATEWAY_BIND_HOST:$GATEWAY_PORT (pid $(cat "$XCBOX_HOME/gateway.pid"))"
   elif gateway_up; then echo "  FAIL gateway answering on :$GATEWAY_PORT but ownership/bind is unverified"
   elif gateway_alive; then echo "  --   gateway pid alive but not answering yet"

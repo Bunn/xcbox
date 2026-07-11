@@ -85,7 +85,7 @@ host and the results stream back over the gateway.
 
 ## Requirements
 
-Apple Silicon · macOS 26+ · Xcode 26+ · Apple [`container`](https://github.com/apple/container)
+Apple Silicon · macOS 26+ · Xcode 26+ · Node.js 20+ · Apple [`container`](https://github.com/apple/container)
 CLI · a global git identity · an SSH agent with a key loaded · Apple container's localhost DNS bridge.
 
 ```bash
@@ -95,6 +95,9 @@ xcbox doctor                 # checks all of the above, including the bridge
 
 The DNS bridge lets boxes reach a host service bound only to `127.0.0.1`. Apple container may
 remove the rule after a restart; `xcbox doctor` and `xcbox up` report the command to recreate it.
+On first use, `xcbox up` installs the exact MCP SDK and XcodeBuildMCP versions recorded in
+`package-lock.json`. The HTTP bridge is part of xcbox itself; later starts use the locked local runtime
+and do not contact npm unless the lock changes.
 
 ## Commands
 
@@ -164,10 +167,25 @@ Standalone bash scripts, run directly:
 
 ```bash
 bin/test-guard.sh bin/test-lib.sh bin/test-dispatch.sh bin/test-doctor.sh bin/test-subcommands.sh
+bin/test-runtime.sh          # locked install detection + offline reuse + lock refresh
 bin/test-gateway.sh          # starts the gateway; verifies a real MCP session
 bin/test-gateway-lifecycle.sh # isolated start → stop → restart lifecycle regression
 bin/test-loop.sh             # full end-to-end: generate a throwaway app → build + test through the sandbox
 ```
+
+## Updating the gateway runtime
+
+Gateway dependencies move only through an explicit lockfile update—never through `@latest` at startup:
+
+```bash
+npm install --save-exact @modelcontextprotocol/sdk@VERSION xcodebuildmcp@VERSION
+bin/test-runtime.sh
+bin/test-gateway-lifecycle.sh
+bin/test-gateway.sh
+```
+
+Review and commit `package.json` and `package-lock.json` together. The next `xcbox up` detects the new
+lockfile hash and runs `npm ci`; unchanged installations continue using their existing local binaries.
 
 ## Security model
 

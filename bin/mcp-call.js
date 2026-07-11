@@ -1,5 +1,5 @@
 // bin/mcp-call.js — minimal MCP-over-HTTP client for the STATEFUL streamable-HTTP
-// gateway (supergateway --stateful). Opens ONE session (initialize +
+// xcbox's stateful HTTP gateway. Opens ONE session (initialize +
 // notifications/initialized), runs the given JSON-RPC calls in order within that
 // session (so tool state like session_set_defaults carries between them, exactly
 // as a real MCP client sees it), prints each call's `result` as one JSON line,
@@ -35,6 +35,23 @@ function post(sid, msg) {
   if (!initMsg || initMsg.error) { console.error("initialize failed: " + JSON.stringify(initMsg && initMsg.error)); process.exit(1); }
   // 2. notifications/initialized — required before regular requests (a notification: no id).
   await (await post(sid, { jsonrpc: "2.0", method: "notifications/initialized", params: {} })).text();
+  // Optional transport probe used by test-gateway: establish and cancel the
+  // standalone server→client SSE stream that real MCP clients may open.
+  if (process.env.XCBOX_MCP_PROBE_GET === "1") {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    const stream = await fetch(base, {
+      method: "GET",
+      headers: { "Accept": "text/event-stream", "mcp-session-id": sid },
+      signal: controller.signal,
+    });
+    if (!stream.ok || !stream.headers.get("content-type")?.includes("text/event-stream")) {
+      console.error(`standalone SSE probe failed: HTTP ${stream.status}`);
+      process.exit(1);
+    }
+    controller.abort();
+    clearTimeout(timer);
+  }
   // 3. run the requested calls in order, sharing this session.
   let id = 1;
   for (const c of calls) {

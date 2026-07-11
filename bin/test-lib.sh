@@ -5,7 +5,7 @@ DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # --- explicit function-existence assertions (honest RED: undefined fns inside
 # `if` are masked and silently evaluate false, which would hide a missing fn) ---
-for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp gateway_alive gateway_bind_matches gateway_listener_pid gateway_pid_is_ours stop_gateway repo_mount_root gateway_bind_is_loopback container_host_bridge_configured ensure_container_gateway_route; do
+for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp node_supported runtime_lock_hash runtime_locked_package_version runtime_package_version runtime_ready ensure_runtime gateway_alive gateway_bind_matches gateway_listener_pid gateway_pid_is_ours stop_gateway repo_mount_root gateway_bind_is_loopback container_host_bridge_configured ensure_container_gateway_route; do
   declare -F "$fn" >/dev/null || { echo "FAIL: $fn not defined"; exit 1; }
 done
 
@@ -27,15 +27,10 @@ if box_exists "xcbox-definitely-not-a-real-box-xyz"; then echo "FAIL: box_exists
 
 # --- safe gateway defaults + Apple container localhost DNS bridge detection ---
 gateway_bind_is_loopback || { echo "FAIL: default gateway bind is not loopback"; exit 1; }
-XCBOX_FORCE_LOOPBACK_PORT=18765 XCBOX_FORCE_LOOPBACK_HOST=127.0.0.1 \
-node -e '
-  const net = require("node:net");
-  net.Server.prototype.listen = (...args) => {
-    process.exit(args[0] === 18765 && args[1] === "127.0.0.1" ? 0 : 1);
-  };
-  require(process.argv[1]);
-  net.createServer().listen(18765, () => {});
-' "$DIR/force-loopback.cjs" || { echo "FAIL: gateway loopback preload did not force a loopback bind"; exit 1; }
+[ -x "$GATEWAY_SCRIPT" ] || { echo "FAIL: built-in gateway is missing or not executable"; exit 1; }
+case "$GATEWAY_CMD_DEFAULT" in
+  *supergateway*|*npx*) echo "FAIL: default gateway command still uses an external bridge"; exit 1 ;;
+esac
 container() {
   if [ "$*" = "system dns list" ]; then
     printf 'DOMAIN\nhost.container.internal\n'
