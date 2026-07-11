@@ -16,6 +16,7 @@ GATEWAY_SCRIPT="$XCBOX_LIB_DIR/xcbox-gateway.mjs"
 GATEWAY_PROCESS_PATTERN="${XCBOX_GATEWAY_PROCESS_PATTERN:-xcbox-gateway.mjs}"
 GATEWAY_START_ATTEMPTS="${XCBOX_GATEWAY_START_ATTEMPTS:-60}"
 GATEWAY_START_DELAY="${XCBOX_GATEWAY_START_DELAY:-2}"
+PROJECT_DISCOVERY_DEPTH="${XCBOX_PROJECT_DISCOVERY_DEPTH:-4}"
 RUNTIME_LOCKFILE="$XCBOX_ROOT/package-lock.json"
 RUNTIME_STAMP="$XCBOX_ROOT/node_modules/.xcbox-lock-sha256"
 XCODEBUILDMCP_BIN="$XCBOX_ROOT/node_modules/.bin/xcodebuildmcp"
@@ -152,19 +153,141 @@ is_ios_project() {
   return 1
 }
 
-# Container name from a project path: xcbox-<sanitized-basename>.
-sanitize_name() {
-  # tr -d '\n' first: basename emits a trailing newline that tr -c would
-  # otherwise turn into a trailing '-' in the container name.
+canonical_path() {
+  [ -d "$1" ] || return 1
+  (cd -P "$1" >/dev/null 2>&1 && pwd)
+}
+
+repo_mount_root() {
+  local dir root
+  dir=$(canonical_path "$1") || return 1
+  root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$root" ]; then canonical_path "$root"; else printf '%s\n' "$dir"; fi
+}
+
+find_xcode_project_dirs() {
+  local root="$1" depth="$PROJECT_DISCOVERY_DEPTH"
+  case "$depth" in ''|*[!0-9]*) depth=4 ;; esac
+  find "$root" -mindepth 1 -maxdepth "$depth" \
+    \( -type d \( -name .git -o -name node_modules -o -name .build -o -name .swiftpm -o -name DerivedData -o -name Pods -o -name Carthage -o -name vendor \) -prune \) -o \
+    \( -type d \( -name '*.xcodeproj' -o -name '*.xcworkspace' \) -print -prune \) 2>/dev/null \
+    | while IFS= read -r artifact; do canonical_path "$(dirname "$artifact")"; done \
+    | LC_ALL=C sort -u
+}
+
+find_swift_package_dirs() {
+  local root="$1" depth="$PROJECT_DISCOVERY_DEPTH"
+  case "$depth" in ''|*[!0-9]*) depth=4 ;; esac
+  find "$root" -mindepth 1 -maxdepth "$depth" \
+    \( -type d \( -name .git -o -name node_modules -o -name .build -o -name .swiftpm -o -name DerivedData -o -name Pods -o -name Carthage -o -name vendor \) -prune \) -o \
+    \( -type f -name Package.swift -print \) 2>/dev/null \
+    | while IFS= read -r manifest; do canonical_path "$(dirname "$manifest")"; done \
+    | LC_ALL=C sort -u
+}
+
+discover_project_dirs() {
+  local root="$1" projects
+  projects=$(find_xcode_project_dirs "$root") || return 1
+  if [ -n "$projects" ]; then printf '%s\n' "$projects"; else find_swift_package_dirs "$root"; fi
+}
+
+# Resolve INPUT to one canonical project directory. Prefer the nearest ancestor
+# that is itself a project; otherwise discover a unique project below the git
+# root. Return 2 for ambiguity and 1 when no project can be found.
+resolve_project_dir() {
+  local input root dir projects count
+  input=$(canonical_path "$1") || return 1
+  root=$(git -C "$input" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -z "$root" ]; then
+    if is_ios_project "$input"; then printf '%s\n' "$input"; return 0; fi
+    return 1
+  fi
+  root=$(canonical_path "$root") || return 1
+
+  dir="$input"
+  while :; do
+    if is_ios_project "$dir"; then printf '%s\n' "$dir"; return 0; fi
+    [ "$dir" = "$root" ] && break
+    case "$dir/" in "$root/"*) dir=$(dirname "$dir") ;; *) break ;; esac
+  done
+
+  projects=$(discover_project_dirs "$root") || return 1
+  count=$(printf '%s\n' "$projects" | awk 'NF { count++ } END { print count+0 }')
+  if [ "$count" -eq 1 ]; then
+    printf '%s\n' "$projects"
+    return 0
+  fi
+  if [ "$count" -gt 1 ]; then
+    echo "xcbox: multiple Xcode/Swift project directories found under $root:" >&2
+    printf '%s\n' "$projects" | sed 's/^/  - /' >&2
+    echo "Set PROJECT to the intended directory and retry." >&2
+    return 2
+  fi
+  return 1
+}
+
+require_project_dir() {
+  local input="$1" project rc canonical
+  if project=$(resolve_project_dir "$input"); then
+    printf '%s\n' "$project"
+    return 0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 2 ] && return 2
+  canonical=$(canonical_path "$input" 2>/dev/null || printf '%s' "$input")
+  echo "xcbox: no .xcodeproj/.xcworkspace/Package.swift found in or below $canonical — run me from an Xcode/Swift project." >&2
+  return 1
+}
+
+# Informational commands remain useful outside a project, but ambiguity must
+# never select an arbitrary box for status/stop/rm.
+project_context_dir() {
+  local input="$1" project rc
+  if project=$(resolve_project_dir "$input"); then
+    printf '%s\n' "$project"
+    return 0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 2 ] && return 2
+  canonical_path "$input"
+}
+
+legacy_box_name() {
   printf 'xcbox-%s' "$(basename "$1" | tr -d '\n' | tr -c 'A-Za-z0-9_.-' '-' | tr '[:upper:]' '[:lower:]')"
 }
 
-# The sandbox mount root for a project dir: the git repo toplevel if the dir is
-# inside a git repo (so .git comes into the box and commit/push work even when
-# the Xcode project sits in a subdirectory of the repo), else the dir itself.
-# Echoes an absolute path.
-repo_mount_root() {
-  git -C "$1" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$1"
+# Container identity from the full canonical project path. The readable prefix
+# aids `container ls`; the hash prevents same-basename collisions.
+sanitize_name() {
+  local path slug hash
+  path=$(canonical_path "$1" 2>/dev/null || printf '%s' "$1")
+  slug=$(basename "$path" | tr -d '\n' | tr -c 'A-Za-z0-9_.-' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-40 | sed 's/[-._]*$//')
+  [ -n "$slug" ] || slug=project
+  hash=$(printf '%s' "$path" | shasum -a 256 | awk '{print substr($1,1,8)}')
+  printf 'xcbox-%s-%s' "$slug" "$hash"
+}
+
+legacy_box_detected() {
+  local project="$1" current_name="$2" legacy
+  legacy=$(legacy_box_name "$project")
+  [ "$legacy" != "$current_name" ] && ! box_exists "$current_name" && box_exists "$legacy"
+}
+
+print_legacy_box_migration() {
+  local project="$1" current_name="$2" legacy
+  legacy=$(legacy_box_name "$project")
+  cat >&2 <<EOF
+xcbox: legacy box '$legacy' exists for a basename matching this project.
+xcbox now uses collision-safe identity '$current_name' and will not guess that
+the legacy box belongs to $project.
+
+Inspect it first, then migrate safely (the shared ~/.xcbox-home is preserved):
+  container stop $legacy
+  container rm $legacy
+  xcbox up
+EOF
 }
 
 # Liveness check via xcbox-gateway's health endpoint (returns "ok"). We do NOT

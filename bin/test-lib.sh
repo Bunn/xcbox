@@ -5,7 +5,7 @@ DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # --- explicit function-existence assertions (honest RED: undefined fns inside
 # `if` are masked and silently evaluate false, which would hide a missing fn) ---
-for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp node_supported runtime_lock_hash runtime_locked_package_version runtime_package_version runtime_ready ensure_runtime gateway_alive gateway_bind_matches gateway_listener_pid gateway_pid_is_ours stop_gateway repo_mount_root gateway_bind_is_loopback container_host_bridge_configured ensure_container_gateway_route; do
+for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp node_supported runtime_lock_hash runtime_locked_package_version runtime_package_version runtime_ready ensure_runtime gateway_alive gateway_bind_matches gateway_listener_pid gateway_pid_is_ours stop_gateway canonical_path repo_mount_root find_xcode_project_dirs find_swift_package_dirs discover_project_dirs resolve_project_dir require_project_dir project_context_dir legacy_box_name sanitize_name legacy_box_detected gateway_bind_is_loopback container_host_bridge_configured ensure_container_gateway_route; do
   declare -F "$fn" >/dev/null || { echo "FAIL: $fn not defined"; exit 1; }
 done
 
@@ -16,11 +16,17 @@ RT=$(mktemp -d)
 RT_TOP=$(cd "$RT/sub/dir" && git rev-parse --show-toplevel)   # git's own canonical toplevel
 [ "$(repo_mount_root "$RT/sub/dir")" = "$RT_TOP" ] || { echo "FAIL: repo_mount_root subdir: $(repo_mount_root "$RT/sub/dir") != $RT_TOP"; exit 1; }
 NR=$(mktemp -d)
-[ "$(repo_mount_root "$NR")" = "$NR" ] || { echo "FAIL: repo_mount_root non-repo: $(repo_mount_root "$NR") != $NR"; exit 1; }
+NR_CANONICAL=$(canonical_path "$NR")
+[ "$(repo_mount_root "$NR")" = "$NR_CANONICAL" ] || { echo "FAIL: repo_mount_root non-repo: $(repo_mount_root "$NR") != $NR_CANONICAL"; exit 1; }
 rm -rf "$RT" "$NR"
 
-# --- sanitize_name: lowercases, replaces unsafe chars, no trailing dash ---
-[ "$(sanitize_name /tmp/My.App)" = "xcbox-my.app" ] || { echo "FAIL: sanitize_name unexpected: $(sanitize_name /tmp/My.App)"; exit 1; }
+# --- sanitize_name: readable slug plus a stable collision-resistant suffix ---
+SANITIZED=$(sanitize_name /tmp/My.App)
+case "$SANITIZED" in
+  xcbox-my.app-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) echo "FAIL: sanitize_name unexpected: $SANITIZED"; exit 1 ;;
+esac
+[ "$SANITIZED" = "$(sanitize_name /tmp/My.App)" ] || { echo "FAIL: sanitize_name is unstable"; exit 1; }
 
 # --- box_exists is false for a bogus name (no match), and does not error ---
 if box_exists "xcbox-definitely-not-a-real-box-xyz"; then echo "FAIL: box_exists matched a bogus name"; exit 1; fi
@@ -70,4 +76,4 @@ if stop_gateway >/dev/null 2>&1; then echo "FAIL: stop_gateway accepted an unrel
 kill -0 "$$" 2>/dev/null || { echo "FAIL: stop_gateway signaled an unrelated pid"; exit 1; }
 rm -rf "$TMPHOME"
 
-echo "lib OK: safe gateway route, sanitize_name, box_exists, gateway_alive, ensure_gateway failure visibility"
+echo "lib OK: safe gateway route, canonical identity, box_exists, gateway_alive, ensure_gateway failure visibility"

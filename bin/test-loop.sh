@@ -15,6 +15,7 @@ else
   AUTO_TMP_ROOT=$(mktemp -d)
   DEMO="$AUTO_TMP_ROOT/IosboxDemo"
 fi
+mkdir -p "$DEMO"
 NAME=$(sanitize_name "$DEMO")
 cleanup() {
   container stop "$NAME" >/dev/null 2>&1 || true

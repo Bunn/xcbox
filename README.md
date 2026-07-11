@@ -31,7 +31,7 @@ Apple builds.
 
 ## Highlights
 
-- **One command.** `cd` into any Xcode/Swift project and run `xcbox`.
+- **One command.** Run `xcbox` from an Xcode/Swift project or a repo containing one.
 - **Project-scoped sandbox.** The agent's filesystem is limited to your repo; the rest of the host stays invisible.
 - **Real host builds.** `xcodebuild` and simulators run on macOS through XcodeBuildMCP — full fidelity, no toolchain shipped in the container.
 - **Commits as you.** Uses your host git identity and forwarded SSH agent; private keys stay on the host.
@@ -78,10 +78,11 @@ HOST (macOS)                                CONTAINER (Linux · repo-only)
   your git identity + forwarded SSH agent     commits as you; keys stay on the host
 ```
 
-`xcbox` mounts the **git repository root** (so `.git` is present and commit/push work even when
-the Xcode project lives in a subdirectory) and drops you into your working directory inside it. The
-build server is registered with the agent at user scope; the agent calls real `xcodebuild` on the
-host and the results stream back over the gateway.
+`xcbox` resolves the nearest Xcode/Swift project, or a unique nested project when run from the
+repository root. It mounts the **git repository root** (so `.git` is present and commit/push work
+even when the Xcode project lives in a subdirectory) and drops you into the resolved project
+directory. The build server is registered with the agent at user scope; the agent calls real
+`xcodebuild` on the host and the results stream back over the gateway.
 
 ## Requirements
 
@@ -116,13 +117,18 @@ The agent's home — login and installed agent — persists in `~/.xcbox-home` a
 
 ### Can I have multiple xcboxes running in parallel?
 
-Yes. Each project gets its own box, named `xcbox-<project-dir-name>`, so `cd`-ing into different
-projects and running `xcbox` gives you independent sandboxes that run side by side. They all share
+Yes. Each project gets a box named from a readable directory slug plus a short hash of its canonical
+full path, such as `xcbox-myapp-a1b2c3d4`. Different projects with the same folder name therefore
+remain independent, while opening the same project through a symlink reuses its box. All boxes share
 the **single** build gateway on `:8765`, which multiplexes their `xcodebuild` calls.
 
-One caveat: boxes are keyed by the project directory's **basename**, not its full path — so two
-different projects that happen to share the same folder name (e.g. two `MyApp` directories) would
-map to the same box. Rename one, or run one at a time.
+If a repository contains multiple Xcode projects, run xcbox inside the intended project directory
+or select it explicitly, for example `PROJECT=apps/MyApp xcbox`. xcbox lists the candidates instead
+of choosing one arbitrarily.
+
+Boxes created by older xcbox versions used only the directory basename. When one is found, xcbox
+refuses to guess its ownership and prints explicit inspect/remove/recreate instructions; it never
+stops or removes that legacy box automatically.
 
 ### Can I use any agent I want, like OpenCode, Codex, etc.?
 
@@ -166,7 +172,12 @@ subdirectory of the repo. You still start in your project directory inside the b
 Standalone bash scripts, run directly:
 
 ```bash
-bin/test-guard.sh bin/test-lib.sh bin/test-dispatch.sh bin/test-doctor.sh bin/test-subcommands.sh
+bin/test-guard.sh
+bin/test-lib.sh
+bin/test-project-identity.sh
+bin/test-dispatch.sh
+bin/test-doctor.sh
+bin/test-subcommands.sh
 bin/test-runtime.sh          # locked install detection + offline reuse + lock refresh
 bin/test-gateway.sh          # starts the gateway; verifies a real MCP session
 bin/test-gateway-lifecycle.sh # isolated start → stop → restart lifecycle regression

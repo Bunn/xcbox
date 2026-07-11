@@ -33,19 +33,21 @@ EOF
 }
 
 cmd_up() {
-  local proj name mount_root
-  proj="${PROJECT:-$(pwd)}"
-  # 1. Looks like an iOS/Xcode project? (guard first — keeps routing cheap to test)
-  if ! is_ios_project "$proj"; then
-    echo "xcbox: no .xcodeproj/.xcworkspace/Package.swift in $proj — run me inside an iOS project." >&2
-    exit 1
-  fi
+  local requested proj name mount_root
+  requested="${PROJECT:-$(pwd)}"
+  # 1. Resolve a canonical project directory. This accepts a project ancestor
+  # or a unique nested project from the repository root.
+  proj=$(require_project_dir "$requested") || return
   name=$(sanitize_name "$proj")
   # Mount the git repo root (not just $proj) so .git is in the box and the agent
   # can commit/push — the Xcode project often lives in a subdir of the repo.
   mount_root=$(repo_mount_root "$proj")
   # 2. Daemon + host build gateway.
   if ! container ls >/dev/null 2>&1; then echo "==> starting container service"; container system start; fi
+  if legacy_box_detected "$proj" "$name"; then
+    print_legacy_box_migration "$proj" "$name"
+    return 1
+  fi
   ensure_container_gateway_route
   ensure_gateway
   # 3. Project sandbox (mounts the repo root; box keyed to $proj) + provisioning.
@@ -117,7 +119,10 @@ cmd_doctor() {
 }
 
 cmd_status() {
-  local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
+  local requested proj name
+  requested="${PROJECT:-$(pwd)}"
+  proj=$(project_context_dir "$requested") || return
+  name=$(sanitize_name "$proj")
   echo "xcbox status — $proj"
   container ls >/dev/null 2>&1 && echo "  OK   container daemon running" || echo "  --   container daemon not running"
   if runtime_ready; then
@@ -129,7 +134,9 @@ cmd_status() {
   elif gateway_up; then echo "  FAIL gateway answering on :$GATEWAY_PORT but ownership/bind is unverified"
   elif gateway_alive; then echo "  --   gateway pid alive but not answering yet"
   else echo "  --   build gateway not running"; fi
-  if box_exists "$name"; then
+  if legacy_box_detected "$proj" "$name"; then
+    echo "  FAIL legacy box '$(legacy_box_name "$proj")' needs explicit migration to '$name'"
+  elif box_exists "$name"; then
     box_running "$name" && echo "  OK   box '$name' running" || echo "  --   box '$name' exists (stopped)"
     if box_running "$name"; then
       container exec "$name" sh -c 'test -x /root/.npm-global/bin/claude' 2>/dev/null \
@@ -151,7 +158,14 @@ cmd_logs() {
 }
 
 cmd_stop() {
-  local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
+  local requested proj name
+  requested="${PROJECT:-$(pwd)}"
+  proj=$(project_context_dir "$requested") || return
+  name=$(sanitize_name "$proj")
+  if legacy_box_detected "$proj" "$name"; then
+    print_legacy_box_migration "$proj" "$name"
+    return 1
+  fi
   if box_running "$name"; then echo "==> stopping box '$name'"; container stop "$name" >/dev/null 2>&1 || true
   else echo "xcbox: box '$name' not running"; fi
   if [ "${1:-}" = "--gateway" ]; then
@@ -160,7 +174,14 @@ cmd_stop() {
 }
 
 cmd_rm() {
-  local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
+  local requested proj name
+  requested="${PROJECT:-$(pwd)}"
+  proj=$(project_context_dir "$requested") || return
+  name=$(sanitize_name "$proj")
+  if legacy_box_detected "$proj" "$name"; then
+    print_legacy_box_migration "$proj" "$name"
+    return 1
+  fi
   if box_exists "$name"; then
     echo "==> removing box '$name'"
     container stop "$name" >/dev/null 2>&1 || true
