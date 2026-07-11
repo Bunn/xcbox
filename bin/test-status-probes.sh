@@ -12,6 +12,8 @@ BOX_NAME=$(XCBOX_HOME="$T/home" bash -c '. "$1/xcbox-lib.sh"; sanitize_name "$2"
 BOX_HOME="$T/home/boxes/$BOX_NAME"
 mkdir -p "$BOX_HOME"
 printf '1\n' > "$BOX_HOME/.xcbox-home-version"
+mkdir -p "$T/home/projects"
+printf 'codex\n' > "$T/home/projects/$BOX_NAME.agent"
 
 cat > "$T/fakebin/container" <<'EOF'
 #!/usr/bin/env bash
@@ -26,8 +28,8 @@ case "$cmd" in
   exec)
     all="$*"
     case "$all" in
-      *'test -x /root/.npm-global/bin/claude'*) exit 0 ;;
-      *'claude mcp list'*) printf 'ios-build\n'; exit 0 ;;
+      *'/root/.npm-global/bin/codex --version'*) printf 'codex-cli 0.144.1\n'; exit 0 ;;
+      *'/root/.npm-global/bin/codex mcp list'*) printf 'ios-build\n'; exit 0 ;;
       *'ssh-add -l'*) exit "${FAKE_SSH_RC:-0}" ;;
       *'node -e'*) exit "${FAKE_GATEWAY_RC:-0}" ;;
       *'node - '*)
@@ -56,6 +58,8 @@ status() {
 }
 
 OUT=$(FAKE_GATEWAY_RC=0 FAKE_MCP_RC=0 FAKE_SSH_RC=0 status) || fail "healthy status exited nonzero"
+printf '%s\n' "$OUT" | grep -Fq 'selected agent: codex' || fail "healthy status missed remembered Codex selection"
+printf '%s\n' "$OUT" | grep -Fq 'codex agent installed' || fail "healthy status missed Codex version"
 printf '%s\n' "$OUT" | grep -Fq 'box can reach host gateway' || fail "healthy status missed container gateway"
 printf '%s\n' "$OUT" | grep -Fq 'real MCP session lists Xcode build tools' || fail "healthy status missed real MCP session"
 printf '%s\n' "$OUT" | grep -Fq 'forwarded SSH agent has an identity' || fail "healthy status missed SSH agent"

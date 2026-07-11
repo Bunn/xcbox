@@ -22,6 +22,7 @@ for test in \
   test-lib.sh \
   test-project-identity.sh \
   test-box-home.sh \
+  test-agents.sh \
   test-list.sh \
   test-logs.sh \
   test-status-probes.sh \

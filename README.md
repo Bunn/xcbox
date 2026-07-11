@@ -11,7 +11,8 @@
 
 ---
 
-`xcbox` drops a coding agent (e.g. [Claude Code](https://www.claude.com/product/claude-code))
+`xcbox` drops [Claude Code](https://www.claude.com/product/claude-code) or
+[Codex](https://developers.openai.com/codex/cli/)
 into a Linux container with **only your project's git repository** mounted — nothing else of your
 machine is visible. The agent still builds and tests the real app **on the host** via
 [XcodeBuildMCP](https://github.com/cameroncooke/XcodeBuildMCP), and commits & pushes with **your
@@ -57,13 +58,28 @@ cd ~/YourApp
 xcbox                        # brings up the sandbox and drops you into a shell
 ```
 
+The first time you open a project, choose its agent:
+
+```text
+Choose the coding agent for this project:
+  1) Claude Code
+  2) Codex
+Agent [1-2]:
+```
+
+xcbox remembers that choice for this project. To switch it later (and remember the new choice), run
+`xcbox --agent codex` or `xcbox --agent claude`.
+
 Inside the box, start your agent and point it at the project:
 
-```
-claude
-/login                       # only if prompted; persists in this project's home
+```bash
+claude                       # when Claude Code is selected
+# or
+codex                        # when Codex is selected
 > Build and test this app, then commit and push.
 ```
+
+Sign in only if prompted. Each agent's login and sessions persist in this project's isolated home.
 
 Run `xcbox doctor` first if you want to check prerequisites. Full walkthrough:
 [`docs/xcbox-quickstart.md`](docs/xcbox-quickstart.md).
@@ -105,7 +121,9 @@ and do not contact npm unless the lock changes.
 
 | Command | Description |
 | --- | --- |
-| `xcbox` · `xcbox up` | bring up the gateway + repo sandbox and enter it |
+| `xcbox` · `xcbox up` | enter the sandbox; asks for an agent on first use |
+| `xcbox --agent claude\|codex` | select, provision, and remember this project's agent |
+| `xcbox --update` | update this project's selected agent to its latest release |
 | `xcbox list` | list every box, project path, state, home status, and retained home |
 | `xcbox status` | verify host + box gateway, real MCP, agent, and forwarded SSH state |
 | `xcbox stop` | stop this project's box (`--gateway` also stops the gateway) |
@@ -113,10 +131,11 @@ and do not contact npm unless the lock changes.
 | `xcbox rm` | remove this project's box (keeps `~/.xcbox-home`) |
 | `xcbox doctor` | check host prerequisites |
 
-Each box gets an independent home under `~/.xcbox-home/boxes/<box-name>`. Its login, installed agent,
-Claude sessions, npm cache, and Git configuration persist across runs without being writable by
-other boxes. A new home copies the freshest existing Claude login and user preferences once; it does
-not copy project history or caches. `xcbox rm` removes the container but retains that home.
+Each box gets an independent home under `~/.xcbox-home/boxes/<box-name>`. Its Claude and Codex logins,
+sessions, installed packages, npm cache, and Git configuration persist across runs without being
+writable by other boxes. Both agents can coexist when you switch. A new home copies the freshest
+existing Claude login and user preferences once; Codex uses its normal first-run sign-in. It does
+not copy project history or caches. `xcbox rm` retains that home and the last agent selection.
 
 `xcbox list` works from any directory. It includes running and stopped containers, warns about
 legacy/shared or mismatched `/root` mounts, and shows retained per-project homes after `xcbox rm`.
@@ -149,16 +168,19 @@ Boxes created by older xcbox versions used only the directory basename. When one
 refuses to guess its ownership and prints explicit inspect/remove/recreate instructions; it never
 stops or removes that legacy box automatically.
 
-### Can I use any agent I want, like OpenCode, Codex, etc.?
+### Can I use Claude Code and Codex?
 
-The box itself is agent-agnostic — it's a plain Linux (`node:22`) shell with the build gateway
-reachable at `http://host.container.internal:8765/mcp`, so you can install and run whatever agent you like
-inside it.
+Yes. On first use, bare `xcbox` asks which one to install and remembers the answer per project.
+`xcbox --agent claude` and `xcbox --agent codex` switch explicitly. xcbox installs an exact tested
+package version, registers the same `ios-build` HTTP MCP for the chosen CLI, and leaves the other
+agent's state intact. Use `xcbox --update` when you deliberately want the selected agent's latest
+release.
 
-What's automated, though, is Claude Code specific: xcbox installs `@anthropic-ai/claude-code` by
-default and auto-registers the build server via `claude mcp add`. You can swap the installed package
-with `XCBOX_AGENT_INSTALL=<npm-package>`, but for a non-Claude agent you'll need to point it at the
-gateway MCP endpoint yourself — xcbox won't wire that up for you.
+For scripts, use `XCBOX_AGENT=claude|codex` or `--agent`; xcbox refuses to guess when there is no
+saved choice and stdin is non-interactive. Package overrides remain available as
+`XCBOX_CLAUDE_INSTALL`, `XCBOX_CODEX_INSTALL`, or the shared `XCBOX_AGENT_INSTALL` escape hatch.
+Other agents can still be installed manually in the plain Linux box and pointed at
+`http://host.container.internal:8765/mcp`, but only Claude Code and Codex are provisioned automatically.
 
 ### Is my host machine 100% protected?
 
@@ -196,6 +218,7 @@ bin/test-guard.sh
 bin/test-lib.sh
 bin/test-project-identity.sh
 bin/test-box-home.sh
+bin/test-agents.sh           # selection memory + Claude/Codex install and MCP wiring
 bin/test-list.sh
 bin/test-logs.sh
 bin/test-status-probes.sh
@@ -203,6 +226,7 @@ bin/test-dispatch.sh
 bin/test-doctor.sh
 bin/test-subcommands.sh
 bin/test-runtime.sh          # locked install detection + offline reuse + lock refresh
+bin/test-agents-container.sh # real throwaway Apple container: install/wire both agents
 bin/test-gateway.sh          # starts the gateway; verifies a real MCP session
 bin/test-gateway-lifecycle.sh # isolated start → stop → restart lifecycle regression
 bin/test-loop.sh             # full end-to-end: generate a throwaway app → build + test through the sandbox

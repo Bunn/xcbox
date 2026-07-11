@@ -306,7 +306,8 @@ gateway_up() {
 # --- Box config (centralized so the CLI and harness share it) ---
 XCBOX_IMAGE="${XCBOX_IMAGE:-node:22}"
 INNER_PATH="${INNER_PATH:-/root/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
-AGENT_INSTALL="${XCBOX_AGENT_INSTALL:-@anthropic-ai/claude-code}"
+CLAUDE_AGENT_INSTALL="${XCBOX_CLAUDE_INSTALL:-${XCBOX_AGENT_INSTALL:-@anthropic-ai/claude-code@2.1.207}}"
+CODEX_AGENT_INSTALL="${XCBOX_CODEX_INSTALL:-${XCBOX_AGENT_INSTALL:-@openai/codex@0.144.1}}"
 
 gateway_alive() {
   local pid
@@ -539,6 +540,136 @@ project_metadata_file() {
   printf '%s/%s\n' "$XCBOX_PROJECT_METADATA_ROOT" "$1"
 }
 
+agent_metadata_file() {
+  case "$1" in ''|*/*|.|..) return 1 ;; esac
+  printf '%s/%s.agent\n' "$XCBOX_PROJECT_METADATA_ROOT" "$1"
+}
+
+valid_agent() {
+  case "${1:-}" in claude|codex) return 0 ;; *) return 1 ;; esac
+}
+
+agent_binary() {
+  case "${1:-}" in
+    claude) printf 'claude\n' ;;
+    codex) printf 'codex\n' ;;
+    *) echo "ERROR: unsupported agent '${1:-}'." >&2; return 2 ;;
+  esac
+}
+
+agent_install_spec() {
+  local agent="${1:-}" update="${2:-0}"
+  valid_agent "$agent" || { echo "ERROR: unsupported agent '$agent'." >&2; return 2; }
+  if [ "$update" = 1 ]; then
+    case "$agent" in
+      claude) printf '%s\n' "${XCBOX_CLAUDE_INSTALL:-${XCBOX_AGENT_INSTALL:-@anthropic-ai/claude-code@latest}}" ;;
+      codex) printf '%s\n' "${XCBOX_CODEX_INSTALL:-${XCBOX_AGENT_INSTALL:-@openai/codex@latest}}" ;;
+    esac
+  else
+    case "$agent" in
+      claude) printf '%s\n' "$CLAUDE_AGENT_INSTALL" ;;
+      codex) printf '%s\n' "$CODEX_AGENT_INSTALL" ;;
+    esac
+  fi
+}
+
+# Codex publishes native binaries as platform-tagged variants of the same npm
+# package. npm can omit an aliased optional dependency during global installs,
+# so install the Linux ARM64 alias explicitly in Apple Silicon boxes.
+codex_platform_install_spec() {
+  case "${1:-0}" in
+    0) printf '%s\n' '@openai/codex-linux-arm64@npm:@openai/codex@0.144.1-linux-arm64' ;;
+    1) printf '%s\n' '@openai/codex-linux-arm64@npm:@openai/codex@linux-arm64' ;;
+    *) echo "ERROR: invalid Codex update mode '${1:-}'." >&2; return 2 ;;
+  esac
+}
+
+read_box_agent() {
+  local file value
+  if [ -L "$XCBOX_PROJECT_METADATA_ROOT" ] || { [ -e "$XCBOX_PROJECT_METADATA_ROOT" ] && [ ! -d "$XCBOX_PROJECT_METADATA_ROOT" ]; }; then
+    echo "ERROR: refusing unsafe project metadata path $XCBOX_PROJECT_METADATA_ROOT." >&2
+    return 2
+  fi
+  file=$(agent_metadata_file "$1") || return 2
+  [ -e "$file" ] || return 1
+  if [ -L "$file" ] || [ ! -f "$file" ]; then
+    echo "ERROR: refusing unsafe agent metadata file $file." >&2
+    return 2
+  fi
+  IFS= read -r value < "$file" || true
+  if ! valid_agent "$value"; then
+    echo "ERROR: invalid saved agent '${value:-empty}' for '$1'; remove $file and retry." >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
+record_box_agent() {
+  local name="$1" agent="$2" root file tmp
+  valid_agent "$agent" || { echo "ERROR: unsupported agent '$agent'." >&2; return 2; }
+  file=$(agent_metadata_file "$name") || return 1
+  if [ -L "$XCBOX_PROJECT_METADATA_ROOT" ] || { [ -e "$XCBOX_PROJECT_METADATA_ROOT" ] && [ ! -d "$XCBOX_PROJECT_METADATA_ROOT" ]; }; then
+    echo "ERROR: refusing unsafe project metadata path $XCBOX_PROJECT_METADATA_ROOT." >&2
+    return 1
+  fi
+  mkdir -p "$XCBOX_PROJECT_METADATA_ROOT"
+  root=$(canonical_path "$XCBOX_PROJECT_METADATA_ROOT") || return 1
+  [ "$(canonical_path "$(dirname "$file")")" = "$root" ] || return 1
+  if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
+    echo "ERROR: refusing unsafe agent metadata file $file." >&2
+    return 1
+  fi
+  tmp=$(mktemp "$root/.${name}.agent.XXXXXX") || return 1
+  if ! printf '%s\n' "$agent" > "$tmp"; then rm -f "$tmp"; return 1; fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+prompt_agent() {
+  local answer
+  printf '%s\n' 'Choose the coding agent for this project:' '  1) Claude Code' '  2) Codex' >&2
+  while true; do
+    printf 'Agent [1-2]: ' >&2
+    if ! IFS= read -r answer; then
+      echo >&2
+      echo "xcbox: no agent selected; use --agent claude or --agent codex" >&2
+      return 1
+    fi
+    case "$answer" in
+      1|claude|Claude) printf 'claude\n'; return 0 ;;
+      2|codex|Codex) printf 'codex\n'; return 0 ;;
+      *) echo "Please enter 1 for Claude Code or 2 for Codex." >&2 ;;
+    esac
+  done
+}
+
+resolve_agent() {
+  local name="$1" explicit="${2:-}" remembered status
+  if [ -n "$explicit" ]; then
+    valid_agent "$explicit" || { echo "xcbox: unsupported agent '$explicit' (choose claude or codex)" >&2; return 2; }
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+  if [ -n "${XCBOX_AGENT:-}" ]; then
+    valid_agent "$XCBOX_AGENT" || { echo "xcbox: invalid XCBOX_AGENT '$XCBOX_AGENT' (choose claude or codex)" >&2; return 2; }
+    printf '%s\n' "$XCBOX_AGENT"
+    return 0
+  fi
+  if remembered=$(read_box_agent "$name"); then
+    printf '%s\n' "$remembered"
+    return 0
+  else
+    status=$?
+    [ "$status" = 1 ] || return "$status"
+  fi
+  if [ -t 0 ]; then
+    prompt_agent
+  else
+    echo "xcbox: no agent selected for this project; use --agent claude or --agent codex" >&2
+    return 2
+  fi
+}
+
 record_box_project() {
   local name="$1" project="$2" root file tmp
   project=$(canonical_path "$project") || return 1
@@ -629,7 +760,7 @@ ensure_box_home() {
   if [ -n "$credentials" ]; then
     echo "==> initialized isolated home for '$name' (copied existing Claude login)"
   else
-    echo "==> initialized isolated home for '$name' (run /login on first use)"
+    echo "==> initialized isolated home for '$name' (sign in to your selected agent on first use)"
   fi
 }
 
@@ -697,11 +828,34 @@ ensure_box() {
 }
 
 ensure_agent() {
-  local name="$1"
-  if ! container exec "$name" sh -c 'test -x /root/.npm-global/bin/claude' 2>/dev/null; then
-    echo "==> first run: installing agent ($AGENT_INSTALL)"
-    container exec -e NPM_CONFIG_PREFIX=/root/.npm-global "$name" npm install -g "$AGENT_INSTALL"
+  local name="$1" agent="$2" update="${3:-0}" spec platform_spec=""
+  valid_agent "$agent" || { echo "ERROR: unsupported agent '$agent'." >&2; return 2; }
+  if [ "$update" = 1 ] || ! agent_version "$name" "$agent" >/dev/null; then
+    spec=$(agent_install_spec "$agent" "$update") || return
+    if [ "$update" = 1 ]; then
+      echo "==> updating $agent agent ($spec)"
+    else
+      echo "==> first use: installing $agent agent ($spec)"
+    fi
+    if [ "$agent" = codex ] && [ -z "${XCBOX_CODEX_INSTALL:-}" ] && [ -z "${XCBOX_AGENT_INSTALL:-}" ]; then
+      platform_spec=$(codex_platform_install_spec "$update") || return
+      container exec -e NPM_CONFIG_PREFIX=/root/.npm-global "$name" npm install -g "$spec" "$platform_spec"
+    else
+      container exec -e NPM_CONFIG_PREFIX=/root/.npm-global "$name" npm install -g "$spec"
+    fi
   fi
+}
+
+agent_version() {
+  local name="$1" agent="$2" binary
+  binary=$(agent_binary "$agent") || return
+  container exec "$name" "/root/.npm-global/bin/$binary" --version 2>/dev/null
+}
+
+agent_mcp_registered() {
+  local name="$1" agent="$2" binary
+  binary=$(agent_binary "$agent") || return
+  container exec "$name" "/root/.npm-global/bin/$binary" mcp list 2>/dev/null | grep -q 'ios-build'
 }
 
 carry_git_identity() {
@@ -713,10 +867,19 @@ carry_git_identity() {
 }
 
 register_mcp() {
-  local name="$1"
-  container exec -e PATH="$INNER_PATH" -e XCBOX_MCP_URL="$GATEWAY_CONTAINER_URL" "$name" sh -c '
-    claude mcp remove ios-build -s user >/dev/null 2>&1 || true
-    claude mcp add --scope user --transport http ios-build \
-      "$XCBOX_MCP_URL" >/dev/null
-  ' || echo "   (warning: could not register ios-build MCP — is the agent installed?)" >&2
+  local name="$1" agent="$2"
+  case "$agent" in
+    claude)
+      container exec "$name" /root/.npm-global/bin/claude mcp remove ios-build -s user >/dev/null 2>&1 || true
+      container exec "$name" /root/.npm-global/bin/claude mcp add --scope user --transport http ios-build "$GATEWAY_CONTAINER_URL" >/dev/null
+      ;;
+    codex)
+      container exec "$name" /root/.npm-global/bin/codex mcp remove ios-build >/dev/null 2>&1 || true
+      container exec "$name" /root/.npm-global/bin/codex mcp add ios-build --url "$GATEWAY_CONTAINER_URL" >/dev/null
+      ;;
+    *) echo "ERROR: unsupported agent '$agent'." >&2; return 2 ;;
+  esac || {
+    echo "ERROR: could not register ios-build MCP for $agent." >&2
+    return 1
+  }
 }

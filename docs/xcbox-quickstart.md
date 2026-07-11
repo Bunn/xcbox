@@ -29,15 +29,20 @@ cd ~/YouriOSApp
 /path/to/ios-agent-sandbox/bin/xcbox     # = 'xcbox up'
 ```
 
-This brings up the build gateway, creates a project-only sandbox, installs the
-agent in this project's isolated home (first time only), wires your git identity
-and the build MCP, and drops you into a shell. Existing login/preferences are
-copied when that home is first created. Then:
+This first asks you to choose Claude Code or Codex. xcbox brings up the build
+gateway, creates a project-only sandbox, installs that agent in this project's
+isolated home, wires your git identity and the build MCP, remembers the choice,
+and drops you into a shell. Later bare `xcbox` runs reuse the saved agent. Then:
 
 ```bash
-claude            # start the agent
-/login            # only if prompted; open the URL on the host and paste the code back
+claude            # if you selected Claude Code
+# or
+codex              # if you selected Codex
 ```
+
+Sign in only if prompted. To switch later, run `xcbox --agent codex` or
+`xcbox --agent claude`; the new selection is remembered and both agents keep
+their separate state. `XCBOX_AGENT=codex xcbox` is available for scripts.
 
 Ask the agent: **"Build and test this app, then commit and push."** It uses the
 `ios-build` MCP tools (`discover_projs`, `build_sim`, `test_sim`) and pushes via
@@ -65,7 +70,7 @@ gh repo create xcbox-demo-scratch --private --source "$D" --remote origin --push
 
 # 2. Box up, log in, drive the agent.
 cd "$D" && /path/to/ios-agent-sandbox/bin/xcbox
-#   inside: claude → /login if prompted → "build, test, commit, and push this app"
+#   choose an agent, then inside: claude or codex → "build, test, commit, and push this app"
 
 # 3. Confirm the commit on the remote, then tear down.
 gh repo view xcbox-demo-scratch --json pushedAt

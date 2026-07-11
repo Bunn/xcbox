@@ -19,7 +19,7 @@ usage() {
   cat >&2 <<'EOF'
 xcbox — sandboxed coding agent for Xcode/Swift projects (project-only)
 
-Usage: xcbox [command]
+Usage: xcbox [command] [options]
 
 Commands:
   up        (default) bring up gateway + project sandbox and enter it
@@ -30,11 +30,26 @@ Commands:
   rm        remove this project's box (keeps ~/.xcbox-home)
   doctor    check host prerequisites
   help      show this help
+
+Up options:
+  --agent claude|codex  select and remember this project's agent
+  --update              update the selected agent to its latest release
 EOF
 }
 
 cmd_up() {
-  local requested proj name mount_root
+  local requested proj name mount_root agent="" update=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --agent)
+        [ "$#" -ge 2 ] || { echo "xcbox: --agent requires claude or codex" >&2; return 2; }
+        agent="$2"; shift 2 ;;
+      --agent=*) agent="${1#*=}"; shift ;;
+      --update) update=1; shift ;;
+      --) shift; [ "$#" -eq 0 ] || { echo "xcbox: unexpected up argument '$1'" >&2; return 2; } ;;
+      *) echo "xcbox: unknown up option '$1'" >&2; return 2 ;;
+    esac
+  done
   requested="${PROJECT:-$(pwd)}"
   # 1. Resolve a canonical project directory. This accepts a project ancestor
   # or a unique nested project from the repository root.
@@ -43,6 +58,7 @@ cmd_up() {
   # Mount the git repo root (not just $proj) so .git is in the box and the agent
   # can commit/push — the Xcode project often lives in a subdir of the repo.
   mount_root=$(repo_mount_root "$proj")
+  agent=$(resolve_agent "$name" "$agent") || return
   # 2. Daemon + host build gateway.
   if ! container ls >/dev/null 2>&1; then echo "==> starting container service"; container system start; fi
   if legacy_box_detected "$proj" "$name"; then
@@ -54,14 +70,19 @@ cmd_up() {
   # 3. Project sandbox (mounts the repo root; box keyed to $proj) + provisioning.
   ensure_box "$name" "$mount_root" "$proj"
   carry_git_identity "$name"
-  ensure_agent "$name"
-  register_mcp "$name"
+  ensure_agent "$name" "$agent" "$update"
+  register_mcp "$name" "$agent"
+  record_box_agent "$name" "$agent"
   # 4. Enter.
   echo "==> entering '$name' (sandboxed to $mount_root; type 'exit' to leave; box keeps running)"
   if [ "$mount_root" != "$proj" ]; then
     echo "    (mounted the git repo root so commit/push work; you start at $proj)"
   fi
-  echo "    run 'claude' and use /login only if prompted. Then ask it to build/test the app."
+  case "$agent" in
+    claude) echo "    selected Claude Code; run 'claude' and use /login only if prompted." ;;
+    codex) echo "    selected Codex; run 'codex' and sign in only if prompted." ;;
+  esac
+  echo "    Then ask it to build/test the app."
   exec container exec -it -w "$proj" -e PATH="$INNER_PATH" "$name" bash
 }
 
@@ -120,7 +141,7 @@ cmd_doctor() {
 }
 
 cmd_status() {
-  local requested proj name box_gateway_ok=0
+  local requested proj name box_gateway_ok=0 agent="" agent_status=0 version=""
   requested="${PROJECT:-$(pwd)}"
   proj=$(project_context_dir "$requested") || return
   name=$(sanitize_name "$proj")
@@ -142,11 +163,28 @@ cmd_status() {
     box_home_isolated "$name" \
       && echo "  OK   isolated per-project home ($(box_home_dir "$name"))" \
       || echo "  FAIL box /root uses a legacy/shared mount (recreate with 'xcbox rm', then 'xcbox up')"
+    if agent=$(read_box_agent "$name"); then
+      echo "  OK   selected agent: $agent (remembered for this project)"
+    else
+      agent_status=$?
+      if [ "$agent_status" = 1 ]; then
+        echo "  --   no selected agent (next 'xcbox' will ask)"
+      else
+        echo "  FAIL selected agent metadata is invalid"
+      fi
+      agent=""
+    fi
     if box_running "$name"; then
-      container exec "$name" sh -c 'test -x /root/.npm-global/bin/claude' 2>/dev/null \
-        && echo "  OK   agent installed" || echo "  --   agent not installed"
-      container exec -e PATH="$INNER_PATH" "$name" sh -c 'claude mcp list 2>/dev/null | grep -q ios-build' 2>/dev/null \
-        && echo "  OK   ios-build MCP registered" || echo "  --   ios-build MCP not registered"
+      if [ -n "$agent" ]; then
+        version=$(agent_version "$name" "$agent" || true)
+        if [ -n "$version" ]; then
+          echo "  OK   $agent agent installed ($version)"
+        else
+          echo "  --   $agent agent not installed"
+        fi
+        agent_mcp_registered "$name" "$agent" \
+          && echo "  OK   ios-build MCP registered for $agent" || echo "  --   ios-build MCP not registered for $agent"
+      fi
       if box_gateway_reachable "$name"; then
         box_gateway_ok=1
         echo "  OK   box can reach host gateway ($GATEWAY_HOST:$GATEWAY_PORT)"
@@ -248,6 +286,7 @@ main() {
   local cmd="${1:-up}"; shift || true
   case "$cmd" in
     up)      cmd_up "$@" ;;
+    --agent|--agent=*|--update) cmd_up "$cmd" "$@" ;;
     list)    cmd_list "$@" ;;
     doctor)  cmd_doctor "$@" ;;
     status)  cmd_status "$@" ;;
