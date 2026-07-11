@@ -60,7 +60,7 @@ cmd_up() {
   if [ "$mount_root" != "$proj" ]; then
     echo "    (mounted the git repo root so commit/push work; you start at $proj)"
   fi
-  echo "    first time: run 'claude', then /login. Then ask it to build/test the app."
+  echo "    run 'claude' and use /login only if prompted. Then ask it to build/test the app."
   exec container exec -it -w "$proj" -e PATH="$INNER_PATH" "$name" bash
 }
 
@@ -138,6 +138,9 @@ cmd_status() {
     echo "  FAIL legacy box '$(legacy_box_name "$proj")' needs explicit migration to '$name'"
   elif box_exists "$name"; then
     box_running "$name" && echo "  OK   box '$name' running" || echo "  --   box '$name' exists (stopped)"
+    box_home_isolated "$name" \
+      && echo "  OK   isolated per-project home ($(box_home_dir "$name"))" \
+      || echo "  FAIL box /root uses a legacy/shared mount (recreate with 'xcbox rm', then 'xcbox up')"
     if box_running "$name"; then
       container exec "$name" sh -c 'test -x /root/.npm-global/bin/claude' 2>/dev/null \
         && echo "  OK   agent installed" || echo "  --   agent not installed"

@@ -3,6 +3,7 @@
 XCBOX_LIB_DIR=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 XCBOX_ROOT="${XCBOX_RUNTIME_ROOT:-$(cd -P "$XCBOX_LIB_DIR/.." >/dev/null 2>&1 && pwd)}"
 XCBOX_HOME="${XCBOX_HOME:-$HOME/.xcbox-home}"
+XCBOX_BOX_HOME_ROOT="${XCBOX_BOX_HOME_ROOT:-$XCBOX_HOME/boxes}"
 GATEWAY_PORT="${GATEWAY_PORT:-8765}"
 MCP_ENDPOINT="${MCP_ENDPOINT:-/mcp}"
 # Keep the unauthenticated gateway off physical network interfaces. Apple
@@ -497,13 +498,138 @@ EOF
 box_exists()  { container ls -a --format json 2>/dev/null | grep -qF "\"$1\""; }
 box_running() { container ls    --format json 2>/dev/null | grep -qF "\"$1\""; }
 
+box_home_dir() {
+  case "$1" in ''|*/*|.|..) return 1 ;; esac
+  printf '%s/%s\n' "$XCBOX_BOX_HOME_ROOT" "$1"
+}
+
+# Choose the freshest copy without sharing the mutable file between boxes.
+# This keeps login portable to a newly created box while avoiding concurrent
+# agents writing the same Claude state.
+latest_box_seed_file() {
+  local relative="$1" candidate latest=""
+  for candidate in "$XCBOX_HOME/$relative" "$XCBOX_BOX_HOME_ROOT"/*/"$relative"; do
+    [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
+    if [ -z "$latest" ] || [ "$candidate" -nt "$latest" ]; then latest="$candidate"; fi
+  done
+  [ -n "$latest" ] || return 1
+  printf '%s\n' "$latest"
+}
+
+seed_box_file() {
+  local home="$1" relative="$2" source destination
+  destination="$home/$relative"
+  [ -e "$destination" ] && return 0
+  source=$(latest_box_seed_file "$relative") || return 0
+  mkdir -p "$(dirname "$destination")"
+  cp -p "$source" "$destination"
+  [ "$relative" != .claude/.credentials.json ] || chmod 600 "$destination"
+}
+
+# .claude.json mixes machine/login preferences with project history. Preserve
+# onboarding/account state but deliberately omit project and MCP records.
+seed_box_claude_config() {
+  local home="$1" source destination="$1/.claude.json"
+  [ -e "$destination" ] && return 0
+  source=$(latest_box_seed_file .claude.json) || return 0
+  node -e '
+    const fs = require("node:fs");
+    const [source, destination] = process.argv.slice(1);
+    const config = JSON.parse(fs.readFileSync(source, "utf8"));
+    for (const key of ["projects", "githubRepoPaths", "mcpServers"]) delete config[key];
+    fs.writeFileSync(destination, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  ' "$source" "$destination"
+}
+
+ensure_box_home() {
+  local name="$1" home marker credentials="" root parent
+  home=$(box_home_dir "$name") || { echo "ERROR: invalid box name '$name'." >&2; return 1; }
+  marker="$home/.xcbox-home-version"
+
+  mkdir -p "$XCBOX_BOX_HOME_ROOT"
+  if [ -L "$home" ] || { [ -e "$home" ] && [ ! -d "$home" ]; }; then
+    echo "ERROR: refusing unsafe box home path $home; move it aside and retry." >&2
+    return 1
+  fi
+  root=$(canonical_path "$XCBOX_BOX_HOME_ROOT") || return 1
+  parent=$(canonical_path "$(dirname "$home")") || return 1
+  [ "$parent" = "$root" ] || { echo "ERROR: box home escapes $root; refusing to mount it." >&2; return 1; }
+  [ -f "$marker" ] && [ ! -L "$marker" ] && return 0
+  if [ -d "$home" ] && find "$home" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+    echo "ERROR: uninitialized box home $home is not empty; inspect or move it aside and retry." >&2
+    return 1
+  fi
+  mkdir -p "$home"
+  chmod 700 "$home"
+  credentials=$(latest_box_seed_file .claude/.credentials.json 2>/dev/null || true)
+  seed_box_file "$home" .claude/.credentials.json
+  seed_box_file "$home" .claude/settings.json
+  seed_box_file "$home" .ssh/known_hosts
+  if ! seed_box_claude_config "$home"; then
+    echo "WARNING: could not migrate Claude preferences into $home; continuing with isolated defaults." >&2
+  fi
+  printf '1\n' > "$marker"
+  if [ -n "$credentials" ]; then
+    echo "==> initialized isolated home for '$name' (copied existing Claude login)"
+  else
+    echo "==> initialized isolated home for '$name' (run /login on first use)"
+  fi
+}
+
+box_root_mount_source() {
+  local name="$1"
+  container inspect "$name" 2>/dev/null | node -e '
+    let input = "";
+    process.stdin.on("data", chunk => input += chunk).on("end", () => {
+      try {
+        const containers = JSON.parse(input);
+        const item = (Array.isArray(containers) ? containers : [containers])
+          .find(container => container?.id === process.argv[1] || container?.configuration?.id === process.argv[1]);
+        const mount = item?.configuration?.mounts?.find(candidate => candidate.destination === "/root");
+        if (!mount?.source) process.exit(1);
+        process.stdout.write(mount.source);
+      } catch { process.exit(1); }
+    });
+  ' "$name"
+}
+
+box_home_isolated() {
+  local name="$1" source expected
+  source=$(box_root_mount_source "$name") || return 1
+  expected=$(canonical_path "$(box_home_dir "$name")") || return 1
+  source=$(canonical_path "$source") || return 1
+  [ "$source" = "$expected" ]
+}
+
+print_box_home_migration() {
+  local name="$1" source
+  source=$(box_root_mount_source "$name" 2>/dev/null || printf 'an unknown or legacy path')
+  cat >&2 <<EOF
+xcbox: box '$name' mounts /root from $source instead of its isolated home.
+Container mounts cannot be changed in place. Recreate only this box, then retry:
+
+  xcbox stop
+  xcbox rm
+  xcbox up
+
+The old $XCBOX_HOME data is preserved. The new home will copy login/preferences
+but not project history, npm caches, or mutable state from other boxes.
+EOF
+}
+
 ensure_box() {
-  local name="$1" proj="$2"
+  local name="$1" proj="$2" home
   mkdir -p "$XCBOX_HOME"
+  if box_exists "$name" && ! box_home_isolated "$name"; then
+    print_box_home_migration "$name"
+    return 1
+  fi
+  ensure_box_home "$name"
+  home=$(box_home_dir "$name")
   if ! box_exists "$name"; then
     echo "==> creating sandbox '$name' (project-only: $proj)"
     container run -d --name "$name" --ssh \
-      -v "$proj:$proj" -v "$XCBOX_HOME:/root" -w "$proj" \
+      -v "$proj:$proj" -v "$home:/root" -w "$proj" \
       "$XCBOX_IMAGE" sleep infinity >/dev/null
   elif ! box_running "$name"; then
     echo "==> starting sandbox '$name'"; container start "$name" >/dev/null

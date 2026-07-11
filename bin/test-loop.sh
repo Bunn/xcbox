@@ -3,6 +3,8 @@
 set -euo pipefail
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$DIR/xcbox-lib.sh"
+TEST_BOX_HOME_ROOT=$(mktemp -d)
+XCBOX_BOX_HOME_ROOT="$TEST_BOX_HOME_ROOT"
 
 # AUTO_TMP_ROOT is set only when we mint our own tmp dir (DEMO_DIR unset).
 # Teardown below removes exactly that root — never a caller-supplied DEMO_DIR's
@@ -20,6 +22,7 @@ NAME=$(sanitize_name "$DEMO")
 cleanup() {
   container stop "$NAME" >/dev/null 2>&1 || true
   container rm   "$NAME" >/dev/null 2>&1 || true
+  rm -rf "$TEST_BOX_HOME_ROOT" || true
   if [ -n "$AUTO_TMP_ROOT" ]; then
     rm -rf "$AUTO_TMP_ROOT" || true        # our own mktemp root only
   else
@@ -80,6 +83,10 @@ if ! container ls >/dev/null 2>&1; then container system start; fi
 ensure_container_gateway_route
 ensure_gateway
 ensure_box "$NAME" "$DEMO"
+EXPECTED_BOX_HOME=$(canonical_path "$(box_home_dir "$NAME")")
+ACTUAL_BOX_HOME=$(canonical_path "$(box_root_mount_source "$NAME")")
+[ "$ACTUAL_BOX_HOME" = "$EXPECTED_BOX_HOME" ] || { echo "FAIL: box /root is not the isolated project home"; exit 1; }
+echo "home OK: /root is isolated at $EXPECTED_BOX_HOME"
 
 # --- 3. Isolation: project visible, host home NOT ---
 container exec "$NAME" ls "$DEMO" >/dev/null 2>&1 || { echo "FAIL: project not visible in box"; exit 1; }

@@ -61,7 +61,7 @@ Inside the box, start your agent and point it at the project:
 
 ```
 claude
-/login                       # one-time; the login persists in ~/.xcbox-home
+/login                       # only if prompted; persists in this project's home
 > Build and test this app, then commit and push.
 ```
 
@@ -75,6 +75,7 @@ HOST (macOS)                                CONTAINER (Linux · repo-only)
   XcodeBuildMCP behind a stateful             your agent (e.g. Claude Code)
   loopback gateway on :8765  ◄────────────────  host.container.internal:8765
   Xcode toolchain (xcodebuild / simctl)       sees ONLY your git repo + its own home
+  isolated per-project agent home             login is seeded; mutable state stays separate
   your git identity + forwarded SSH agent     commits as you; keys stay on the host
 ```
 
@@ -111,7 +112,14 @@ and do not contact npm unless the lock changes.
 | `xcbox rm` | remove this project's box (keeps `~/.xcbox-home`) |
 | `xcbox doctor` | check host prerequisites |
 
-The agent's home — login and installed agent — persists in `~/.xcbox-home` across runs and boxes.
+Each box gets an independent home under `~/.xcbox-home/boxes/<box-name>`. Its login, installed agent,
+Claude sessions, npm cache, and Git configuration persist across runs without being writable by
+other boxes. A new home copies the freshest existing Claude login and user preferences once; it does
+not copy project history or caches. `xcbox rm` removes the container but retains that home.
+
+Boxes created by an older version may still mount all of `~/.xcbox-home` as `/root`. xcbox refuses
+to start those with shared state and asks you to stop/remove/recreate the container; the old home is
+left untouched and used only to seed login/preferences into the replacement.
 
 ## FAQ
 
@@ -175,6 +183,7 @@ Standalone bash scripts, run directly:
 bin/test-guard.sh
 bin/test-lib.sh
 bin/test-project-identity.sh
+bin/test-box-home.sh
 bin/test-dispatch.sh
 bin/test-doctor.sh
 bin/test-subcommands.sh

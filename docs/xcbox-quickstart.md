@@ -30,12 +30,13 @@ cd ~/YouriOSApp
 ```
 
 This brings up the build gateway, creates a project-only sandbox, installs the
-agent (first time only), wires your git identity + the build MCP, and drops you
-into a shell. Then:
+agent in this project's isolated home (first time only), wires your git identity
+and the build MCP, and drops you into a shell. Existing login/preferences are
+copied when that home is first created. Then:
 
 ```bash
 claude            # start the agent
-/login            # one-time; open the printed URL on the host, paste the code back
+/login            # only if prompted; open the URL on the host and paste the code back
 ```
 
 Ask the agent: **"Build and test this app, then commit and push."** It uses the
@@ -63,7 +64,7 @@ gh repo create xcbox-demo-scratch --private --source "$D" --remote origin --push
 
 # 2. Box up, log in, drive the agent.
 cd "$D" && /path/to/ios-agent-sandbox/bin/xcbox
-#   inside: claude → /login → "build, test, commit, and push this app"
+#   inside: claude → /login if prompted → "build, test, commit, and push this app"
 
 # 3. Confirm the commit on the remote, then tear down.
 gh repo view xcbox-demo-scratch --json pushedAt
