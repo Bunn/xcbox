@@ -165,6 +165,7 @@ Standalone bash scripts, run directly:
 ```bash
 bin/test-guard.sh bin/test-lib.sh bin/test-dispatch.sh bin/test-doctor.sh bin/test-subcommands.sh
 bin/test-gateway.sh          # starts the gateway; verifies a real MCP session
+bin/test-gateway-lifecycle.sh # isolated start → stop → restart lifecycle regression
 bin/test-loop.sh             # full end-to-end: generate a throwaway app → build + test through the sandbox
 ```
 

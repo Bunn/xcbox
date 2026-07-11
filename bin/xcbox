@@ -114,7 +114,8 @@ cmd_status() {
   local proj name; proj="${PROJECT:-$(pwd)}"; name=$(sanitize_name "$proj")
   echo "xcbox status — $proj"
   container ls >/dev/null 2>&1 && echo "  OK   container daemon running" || echo "  --   container daemon not running"
-  if gateway_up; then echo "  OK   build gateway serving on :$GATEWAY_PORT"
+  if gateway_up && gateway_alive && gateway_bind_matches; then echo "  OK   build gateway serving on $GATEWAY_BIND_HOST:$GATEWAY_PORT (pid $(cat "$XCBOX_HOME/gateway.pid"))"
+  elif gateway_up; then echo "  FAIL gateway answering on :$GATEWAY_PORT but ownership/bind is unverified"
   elif gateway_alive; then echo "  --   gateway pid alive but not answering yet"
   else echo "  --   build gateway not running"; fi
   if box_exists "$name"; then
@@ -143,11 +144,7 @@ cmd_stop() {
   if box_running "$name"; then echo "==> stopping box '$name'"; container stop "$name" >/dev/null 2>&1 || true
   else echo "xcbox: box '$name' not running"; fi
   if [ "${1:-}" = "--gateway" ]; then
-    if gateway_alive; then
-      echo "==> stopping gateway (pid $(cat "$XCBOX_HOME/gateway.pid"))"
-      kill "$(cat "$XCBOX_HOME/gateway.pid")" 2>/dev/null || true
-      rm -f "$XCBOX_HOME/gateway.pid" "$XCBOX_HOME/gateway.bind"
-    else echo "xcbox: gateway not running"; fi
+    stop_gateway
   fi
 }
 

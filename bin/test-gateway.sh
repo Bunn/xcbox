@@ -9,6 +9,10 @@ LISTENER=$(lsof -nP -iTCP:"$GATEWAY_PORT" -sTCP:LISTEN 2>/dev/null || true)
 echo "$LISTENER" | grep -qF "TCP 127.0.0.1:$GATEWAY_PORT (LISTEN)" || {
   echo "gateway is not loopback-only:"; echo "$LISTENER"; exit 1
 }
+RECORDED_PID=$(cat "$XCBOX_HOME/gateway.pid")
+[ "$RECORDED_PID" = "$(gateway_listener_pid)" ] && gateway_pid_is_ours "$RECORDED_PID" || {
+  echo "gateway.pid does not identify the verified listener"; exit 1
+}
 # ensure_gateway confirms liveness via /healthz. Now confirm the MCP endpoint answers a
 # real (stateful) session — initialize + tools/list must return XcodeBuildMCP's tools —
 # using the same session-aware client (mcp-call.js) the agent/harness use.

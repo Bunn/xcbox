@@ -12,6 +12,9 @@ GATEWAY_HOST="${XCBOX_GATEWAY_HOST:-host.container.internal}"
 GATEWAY_LOCALHOST_IP="${XCBOX_GATEWAY_LOCALHOST_IP:-203.0.113.113}"
 GATEWAY_CONTAINER_URL="http://$GATEWAY_HOST:$GATEWAY_PORT$MCP_ENDPOINT"
 GATEWAY_LOOPBACK_PRELOAD="$XCBOX_LIB_DIR/force-loopback.cjs"
+GATEWAY_PROCESS_PATTERN="${XCBOX_GATEWAY_PROCESS_PATTERN:-supergateway}"
+GATEWAY_START_ATTEMPTS="${XCBOX_GATEWAY_START_ATTEMPTS:-60}"
+GATEWAY_START_DELAY="${XCBOX_GATEWAY_START_DELAY:-2}"
 # GATEWAY_CMD: serve XcodeBuildMCP over streamable HTTP.
 # --stateful is REQUIRED: the stateless streamableHttp bridge crashes a real MCP
 # client's multi-message session ("No connection established for request ID"),
@@ -93,20 +96,137 @@ AGENT_INSTALL="${XCBOX_AGENT_INSTALL:-@anthropic-ai/claude-code}"
 gateway_alive() {
   local pid
   pid=$(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null) || return 1
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  gateway_pid_is_ours "$pid"
 }
 
 gateway_bind_matches() {
   [ "$(cat "$XCBOX_HOME/gateway.bind" 2>/dev/null)" = "$GATEWAY_BIND_HOST:$GATEWAY_PORT" ]
 }
 
+gateway_listener_pid() {
+  lsof -nP -t -iTCP:"$GATEWAY_PORT" -sTCP:LISTEN 2>/dev/null | sed -n '1p'
+}
+
+gateway_pid_is_ours() {
+  local pid="${1:-}" listener
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -qF -- "$GATEWAY_PROCESS_PATTERN" || return 1
+  listener=$(lsof -nP -a -p "$pid" -iTCP:"$GATEWAY_PORT" -sTCP:LISTEN 2>/dev/null) || return 1
+  if gateway_bind_is_loopback; then
+    printf '%s\n' "$listener" | grep -qF "TCP $GATEWAY_BIND_HOST:$GATEWAY_PORT (LISTEN)"
+  else
+    [ -n "$listener" ]
+  fi
+}
+
+gateway_launcher_is_ours() {
+  local pid="${1:-}"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -qF -- "$GATEWAY_PROCESS_PATTERN"
+}
+
+clear_gateway_metadata() {
+  rm -f "$XCBOX_HOME/gateway.pid" "$XCBOX_HOME/gateway.launcher.pid" "$XCBOX_HOME/gateway.bind"
+}
+
+cleanup_gateway_start() {
+  local launcher_pid="${1:-}" listener_pid
+  listener_pid=$(gateway_listener_pid 2>/dev/null || true)
+  if gateway_pid_is_ours "$listener_pid"; then kill "$listener_pid" 2>/dev/null || true; fi
+  if gateway_launcher_is_ours "$launcher_pid"; then kill "$launcher_pid" 2>/dev/null || true; fi
+  wait "$launcher_pid" 2>/dev/null || true
+  clear_gateway_metadata
+}
+
+stop_gateway() {
+  local pid launcher_pid listener_pid i
+  pid=$(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null || true)
+
+  if [ -z "$pid" ]; then
+    if gateway_up; then
+      echo "ERROR: a gateway is answering on :$GATEWAY_PORT but has no xcbox ownership metadata; refusing to kill it." >&2
+      return 1
+    fi
+    clear_gateway_metadata
+    echo "xcbox: gateway not running"
+    return 0
+  fi
+
+  if ! kill -0 "$pid" 2>/dev/null; then
+    clear_gateway_metadata
+    if gateway_up; then
+      echo "ERROR: the recorded gateway pid is stale but another process is answering on :$GATEWAY_PORT; refusing to kill it." >&2
+      return 1
+    fi
+    echo "xcbox: gateway not running (cleared stale pid $pid)"
+    return 0
+  fi
+
+  if ! gateway_pid_is_ours "$pid"; then
+    echo "ERROR: pid $pid is not the verified xcbox gateway listener on $GATEWAY_BIND_HOST:$GATEWAY_PORT; refusing to kill it." >&2
+    return 1
+  fi
+
+  echo "==> stopping gateway listener (pid $pid)"
+  kill "$pid" 2>/dev/null || {
+    echo "ERROR: could not signal gateway pid $pid" >&2
+    return 1
+  }
+  # Reap it when stop_gateway runs in the same shell that launched it (tests and
+  # one-shot callers). In normal CLI use it is not our child, so wait is a no-op.
+  wait "$pid" 2>/dev/null || true
+
+  for i in $(seq 1 50); do
+    listener_pid=$(gateway_listener_pid 2>/dev/null || true)
+    [ -z "$listener_pid" ] && break
+    sleep 0.1
+  done
+  listener_pid=$(gateway_listener_pid 2>/dev/null || true)
+  if [ -n "$listener_pid" ]; then
+    echo "ERROR: gateway port :$GATEWAY_PORT is still held by pid $listener_pid after shutdown" >&2
+    return 1
+  fi
+
+  launcher_pid=$(cat "$XCBOX_HOME/gateway.launcher.pid" 2>/dev/null || true)
+  for i in $(seq 1 20); do
+    gateway_launcher_is_ours "$launcher_pid" || break
+    sleep 0.1
+  done
+  if gateway_launcher_is_ours "$launcher_pid"; then
+    kill "$launcher_pid" 2>/dev/null || {
+      echo "ERROR: gateway listener stopped, but launcher pid $launcher_pid could not be signaled" >&2
+      return 1
+    }
+    wait "$launcher_pid" 2>/dev/null || true
+    for i in $(seq 1 20); do
+      gateway_launcher_is_ours "$launcher_pid" || break
+      sleep 0.1
+    done
+    if gateway_launcher_is_ours "$launcher_pid"; then
+      echo "ERROR: gateway listener stopped, but launcher pid $launcher_pid is still alive" >&2
+      return 1
+    fi
+  fi
+
+  clear_gateway_metadata
+  echo "==> gateway stopped; port :$GATEWAY_PORT is free"
+}
+
 ensure_gateway() {
-  local gateway_node_options="--require=$GATEWAY_LOOPBACK_PRELOAD"
+  local gateway_node_options="--require=$GATEWAY_LOOPBACK_PRELOAD" launcher_pid listener_pid old_pid
   if [ -n "${NODE_OPTIONS:-}" ]; then gateway_node_options="$gateway_node_options $NODE_OPTIONS"; fi
   mkdir -p "$XCBOX_HOME"
   if gateway_up; then
-    if gateway_bind_matches; then
-      echo "==> build gateway already up on $GATEWAY_BIND_HOST:$GATEWAY_PORT"
+    listener_pid=$(gateway_listener_pid 2>/dev/null || true)
+    if gateway_bind_matches && gateway_pid_is_ours "$listener_pid"; then
+      old_pid=$(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null || true)
+      if [ -n "$old_pid" ] && [ "$old_pid" != "$listener_pid" ] && gateway_launcher_is_ours "$old_pid"; then
+        printf '%s\n' "$old_pid" > "$XCBOX_HOME/gateway.launcher.pid"
+      fi
+      printf '%s\n' "$listener_pid" > "$XCBOX_HOME/gateway.pid"
+      echo "==> build gateway already up on $GATEWAY_BIND_HOST:$GATEWAY_PORT (pid $listener_pid)"
       return 0
     fi
     cat >&2 <<EOF
@@ -121,31 +241,40 @@ EOF
   fi
   if [ -f "$XCBOX_HOME/gateway.pid" ] && ! gateway_alive; then
     echo "==> clearing stale gateway pid ($(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null))"
-    rm -f "$XCBOX_HOME/gateway.pid" "$XCBOX_HOME/gateway.bind"
+    clear_gateway_metadata
   fi
-  echo "==> starting build gateway (XcodeBuildMCP) on :$GATEWAY_PORT"
+  echo "==> starting build gateway (XcodeBuildMCP) on $GATEWAY_BIND_HOST:$GATEWAY_PORT"
   : > "$XCBOX_HOME/gateway.log"
   nohup env \
     XCBOX_FORCE_LOOPBACK_PORT="$GATEWAY_PORT" \
     XCBOX_FORCE_LOOPBACK_HOST="$GATEWAY_BIND_HOST" \
     NODE_OPTIONS="$gateway_node_options" \
-    sh -c "$GATEWAY_CMD" >>"$XCBOX_HOME/gateway.log" 2>&1 &
-  local gw_pid=$!
+    sh -c "exec $GATEWAY_CMD" >>"$XCBOX_HOME/gateway.log" 2>&1 &
+  launcher_pid=$!
+  printf '%s\n' "$launcher_pid" > "$XCBOX_HOME/gateway.launcher.pid"
   local i
-  for i in $(seq 1 60); do
-    if ! kill -0 "$gw_pid" 2>/dev/null; then
+  for i in $(seq 1 "$GATEWAY_START_ATTEMPTS"); do
+    if ! kill -0 "$launcher_pid" 2>/dev/null; then
       echo "ERROR: gateway exited early; see $XCBOX_HOME/gateway.log" >&2
       sed -n '1,20p' "$XCBOX_HOME/gateway.log" >&2 || true
+      cleanup_gateway_start "$launcher_pid"
       return 1
     fi
     if gateway_up; then
-      echo "$gw_pid" > "$XCBOX_HOME/gateway.pid"   # record only once confirmed listening
+      listener_pid=$(gateway_listener_pid 2>/dev/null || true)
+      if ! gateway_pid_is_ours "$listener_pid"; then
+        echo "ERROR: gateway answered but its listener could not be verified; refusing to track or expose it." >&2
+        cleanup_gateway_start "$launcher_pid"
+        return 1
+      fi
+      printf '%s\n' "$listener_pid" > "$XCBOX_HOME/gateway.pid"
       printf '%s\n' "$GATEWAY_BIND_HOST:$GATEWAY_PORT" > "$XCBOX_HOME/gateway.bind"
-      echo "==> gateway ready"; return 0
+      echo "==> gateway ready (listener pid $listener_pid)"; return 0
     fi
-    sleep 2
+    sleep "$GATEWAY_START_DELAY"
   done
   echo "ERROR: gateway did not become ready in time; see $XCBOX_HOME/gateway.log" >&2
+  cleanup_gateway_start "$launcher_pid"
   return 1
 }
 

@@ -5,7 +5,7 @@ DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # --- explicit function-existence assertions (honest RED: undefined fns inside
 # `if` are masked and silently evaluate false, which would hide a missing fn) ---
-for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp gateway_alive gateway_bind_matches repo_mount_root gateway_bind_is_loopback container_host_bridge_configured ensure_container_gateway_route; do
+for fn in box_exists box_running ensure_box ensure_agent carry_git_identity register_mcp gateway_alive gateway_bind_matches gateway_listener_pid gateway_pid_is_ours stop_gateway repo_mount_root gateway_bind_is_loopback container_host_bridge_configured ensure_container_gateway_route; do
   declare -F "$fn" >/dev/null || { echo "FAIL: $fn not defined"; exit 1; }
 done
 
@@ -68,6 +68,11 @@ export GATEWAY_PORT=8791   # unlikely to be in use; gateway_up returns fast (con
 export GATEWAY_CMD="sh -c 'echo BOOMERR >&2; exit 7'"
 if ensure_gateway; then echo "FAIL: ensure_gateway returned success for a failing command"; exit 1; fi
 grep -q BOOMERR "$XCBOX_HOME/gateway.log" || { echo "FAIL: failed start left no diagnostic in gateway.log"; exit 1; }
+
+# --- stop_gateway refuses to signal an unrelated live pid ---
+echo "$$" > "$XCBOX_HOME/gateway.pid"
+if stop_gateway >/dev/null 2>&1; then echo "FAIL: stop_gateway accepted an unrelated pid"; exit 1; fi
+kill -0 "$$" 2>/dev/null || { echo "FAIL: stop_gateway signaled an unrelated pid"; exit 1; }
 rm -rf "$TMPHOME"
 
 echo "lib OK: safe gateway route, sanitize_name, box_exists, gateway_alive, ensure_gateway failure visibility"
