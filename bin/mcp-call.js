@@ -11,6 +11,12 @@
 // (argv[2]=URL, argv[3]=CALLS in both).
 const [, , base, callsRaw] = process.argv;
 const calls = JSON.parse(callsRaw);
+const timeoutMs = Number(process.env.XCBOX_MCP_TIMEOUT_MS || 0);
+const requestSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : null;
+
+function requestOptions(options) {
+  return requestSignal ? { ...options, signal: requestSignal } : options;
+}
 
 // streamableHttp frames responses as SSE: lines beginning "data: <json>".
 function parseSSE(text, id) {
@@ -24,7 +30,7 @@ function parseSSE(text, id) {
 function post(sid, msg) {
   const headers = { "Accept": "application/json, text/event-stream", "Content-Type": "application/json" };
   if (sid) headers["mcp-session-id"] = sid;
-  return fetch(base, { method: "POST", headers, body: JSON.stringify(msg) });
+  return fetch(base, requestOptions({ method: "POST", headers, body: JSON.stringify(msg) }));
 }
 
 (async () => {
@@ -64,5 +70,5 @@ function post(sid, msg) {
     console.log(JSON.stringify(msg.result));
   }
   // 4. best-effort session teardown so we don't leak sessions on the stateful server.
-  try { if (sid) await fetch(base, { method: "DELETE", headers: { "mcp-session-id": sid } }); } catch { /* ignore */ }
+  try { if (sid) await fetch(base, requestOptions({ method: "DELETE", headers: { "mcp-session-id": sid } })); } catch { /* ignore */ }
 })().catch((e) => { console.error(e.message); process.exit(1); });

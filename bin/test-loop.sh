@@ -87,6 +87,12 @@ EXPECTED_BOX_HOME=$(canonical_path "$(box_home_dir "$NAME")")
 ACTUAL_BOX_HOME=$(canonical_path "$(box_root_mount_source "$NAME")")
 [ "$ACTUAL_BOX_HOME" = "$EXPECTED_BOX_HOME" ] || { echo "FAIL: box /root is not the isolated project home"; exit 1; }
 echo "home OK: /root is isolated at $EXPECTED_BOX_HOME"
+STATUS_OUTPUT=$(PROJECT="$DEMO" XCBOX_BOX_HOME_ROOT="$TEST_BOX_HOME_ROOT" "$DIR/xcbox" status)
+printf '%s\n' "$STATUS_OUTPUT" | grep -q 'OK   box can reach host gateway' \
+  || { echo "FAIL: status did not verify the gateway from inside the box"; echo "$STATUS_OUTPUT"; exit 1; }
+printf '%s\n' "$STATUS_OUTPUT" | grep -q 'OK   real MCP session lists Xcode build tools' \
+  || { echo "FAIL: status did not verify a real MCP session from inside the box"; echo "$STATUS_OUTPUT"; exit 1; }
+echo "status OK: container gateway and real MCP probes passed"
 
 # --- 3. Isolation: project visible, host home NOT ---
 container exec "$NAME" ls "$DEMO" >/dev/null 2>&1 || { echo "FAIL: project not visible in box"; exit 1; }
@@ -95,6 +101,11 @@ echo "isolation OK: project visible, host home blocked"
 
 # --- 4. SSH-agent auth round-trip (proves push prerequisite, login-independent) ---
 # GitHub's ssh returns exit 1 with a 'successfully authenticated' banner when auth works.
+if box_ssh_agent_ready "$NAME"; then
+  echo "ssh agent OK: forwarded socket has a loaded identity"
+else
+  echo "WARN: forwarded SSH agent has no usable identity — status repair guidance verified by unit test"
+fi
 if container exec "$NAME" sh -c 'ssh -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1' | grep -qi "successfully authenticated"; then
   echo "ssh OK: forwarded agent authenticates to GitHub"
   SSH_STATUS=confirmed

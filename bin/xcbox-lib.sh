@@ -13,10 +13,13 @@ GATEWAY_BIND_HOST="${XCBOX_GATEWAY_BIND_HOST:-127.0.0.1}"
 GATEWAY_HOST="${XCBOX_GATEWAY_HOST:-host.container.internal}"
 GATEWAY_LOCALHOST_IP="${XCBOX_GATEWAY_LOCALHOST_IP:-203.0.113.113}"
 GATEWAY_CONTAINER_URL="http://$GATEWAY_HOST:$GATEWAY_PORT$MCP_ENDPOINT"
+GATEWAY_CONTAINER_HEALTH_URL="http://$GATEWAY_HOST:$GATEWAY_PORT/healthz"
 GATEWAY_SCRIPT="$XCBOX_LIB_DIR/xcbox-gateway.mjs"
+MCP_CALL_SCRIPT="$XCBOX_LIB_DIR/mcp-call.js"
 GATEWAY_PROCESS_PATTERN="${XCBOX_GATEWAY_PROCESS_PATTERN:-xcbox-gateway.mjs}"
 GATEWAY_START_ATTEMPTS="${XCBOX_GATEWAY_START_ATTEMPTS:-60}"
 GATEWAY_START_DELAY="${XCBOX_GATEWAY_START_DELAY:-2}"
+STATUS_PROBE_TIMEOUT_MS="${XCBOX_STATUS_PROBE_TIMEOUT_MS:-10000}"
 PROJECT_DISCOVERY_DEPTH="${XCBOX_PROJECT_DISCOVERY_DEPTH:-4}"
 RUNTIME_LOCKFILE="$XCBOX_ROOT/package-lock.json"
 RUNTIME_STAMP="$XCBOX_ROOT/node_modules/.xcbox-lock-sha256"
@@ -497,6 +500,32 @@ EOF
 # it appears in the JSON so a basename substring can't false-match.
 box_exists()  { container ls -a --format json 2>/dev/null | grep -qF "\"$1\""; }
 box_running() { container ls    --format json 2>/dev/null | grep -qF "\"$1\""; }
+
+box_gateway_reachable() {
+  local name="$1"
+  container exec "$name" node -e '
+    const [url, timeout] = process.argv.slice(1);
+    fetch(url, { signal: AbortSignal.timeout(Number(timeout)) })
+      .then(async response => process.exit(response.ok && /ok/i.test(await response.text()) ? 0 : 1))
+      .catch(() => process.exit(1));
+  ' "$GATEWAY_CONTAINER_HEALTH_URL" "$STATUS_PROBE_TIMEOUT_MS" >/dev/null 2>&1
+}
+
+box_mcp_ready() {
+  local name="$1"
+  XCBOX_MCP_TIMEOUT_MS="$STATUS_PROBE_TIMEOUT_MS" \
+    container exec -i -e XCBOX_MCP_TIMEOUT_MS="$STATUS_PROBE_TIMEOUT_MS" "$name" \
+      node - "$GATEWAY_CONTAINER_URL" '[{"method":"tools/list","params":{}}]' \
+      < "$MCP_CALL_SCRIPT" 2>/dev/null \
+    | grep -qiE 'build_sim|discover_projs|simulator'
+}
+
+box_ssh_agent_ready() {
+  local name="$1"
+  container exec "$name" sh -c '
+    test -n "${SSH_AUTH_SOCK:-}" && test -S "$SSH_AUTH_SOCK" && ssh-add -l >/dev/null 2>&1
+  ' >/dev/null 2>&1
+}
 
 box_home_dir() {
   case "$1" in ''|*/*|.|..) return 1 ;; esac

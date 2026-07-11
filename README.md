@@ -106,7 +106,7 @@ and do not contact npm unless the lock changes.
 | Command | Description |
 | --- | --- |
 | `xcbox` · `xcbox up` | bring up the gateway + repo sandbox and enter it |
-| `xcbox status` | show gateway / box / agent / MCP state for this project |
+| `xcbox status` | verify host + box gateway, real MCP, agent, and forwarded SSH state |
 | `xcbox stop` | stop this project's box (`--gateway` also stops the gateway) |
 | `xcbox logs` | tail the build gateway log |
 | `xcbox rm` | remove this project's box (keeps `~/.xcbox-home`) |
@@ -120,6 +120,10 @@ not copy project history or caches. `xcbox rm` removes the container but retains
 Boxes created by an older version may still mount all of `~/.xcbox-home` as `/root`. xcbox refuses
 to start those with shared state and asks you to stop/remove/recreate the container; the old home is
 left untouched and used only to seed login/preferences into the replacement.
+
+For a running box, `xcbox status` checks the complete operational path: an in-container gateway
+health request, a bounded stateful MCP `tools/list` session, and `ssh-add -l` through the forwarded
+socket. Failures include the relevant restart, DNS bridge, log, SSH-agent, or box-recreation command.
 
 ## FAQ
 
@@ -184,6 +188,7 @@ bin/test-guard.sh
 bin/test-lib.sh
 bin/test-project-identity.sh
 bin/test-box-home.sh
+bin/test-status-probes.sh
 bin/test-dispatch.sh
 bin/test-doctor.sh
 bin/test-subcommands.sh
