@@ -23,6 +23,7 @@ for test in \
   test-project-identity.sh \
   test-box-home.sh \
   test-list.sh \
+  test-logs.sh \
   test-status-probes.sh \
   test-dispatch.sh \
   test-doctor.sh \

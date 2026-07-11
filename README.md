@@ -109,7 +109,7 @@ and do not contact npm unless the lock changes.
 | `xcbox list` | list every box, project path, state, home status, and retained home |
 | `xcbox status` | verify host + box gateway, real MCP, agent, and forwarded SSH state |
 | `xcbox stop` | stop this project's box (`--gateway` also stops the gateway) |
-| `xcbox logs` | tail the build gateway log |
+| `xcbox logs` | tail the gateway log (`-f` follows; `--lines N` controls history) |
 | `xcbox rm` | remove this project's box (keeps `~/.xcbox-home`) |
 | `xcbox doctor` | check host prerequisites |
 
@@ -120,6 +120,9 @@ not copy project history or caches. `xcbox rm` removes the container but retains
 
 `xcbox list` works from any directory. It includes running and stopped containers, warns about
 legacy/shared or mismatched `/root` mounts, and shows retained per-project homes after `xcbox rm`.
+
+`xcbox logs -f` follows new gateway output until interrupted; Ctrl-C stops only the follower. Use
+`xcbox logs --lines N` (or `-n N`) to choose how much existing history is printed first.
 
 Boxes created by an older version may still mount all of `~/.xcbox-home` as `/root`. xcbox refuses
 to start those with shared state and asks you to stop/remove/recreate the container; the old home is
@@ -194,6 +197,7 @@ bin/test-lib.sh
 bin/test-project-identity.sh
 bin/test-box-home.sh
 bin/test-list.sh
+bin/test-logs.sh
 bin/test-status-probes.sh
 bin/test-dispatch.sh
 bin/test-doctor.sh

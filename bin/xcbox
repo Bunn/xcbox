@@ -26,7 +26,7 @@ Commands:
   list      list all xcbox containers and retained project homes
   status    show gateway/box/agent/MCP state for this project
   stop      stop this project's box (add --gateway to also stop the gateway)
-  logs      tail the build gateway log
+  logs      tail the build gateway log (-f follows; --lines N controls history)
   rm        remove this project's box (keeps ~/.xcbox-home)
   doctor    check host prerequisites
   help      show this help
@@ -172,11 +172,32 @@ cmd_status() {
 }
 
 cmd_logs() {
-  if [ -s "$XCBOX_HOME/gateway.log" ]; then
-    tail -n "${XCBOX_LOG_LINES:-50}" "$XCBOX_HOME/gateway.log"
-  else
-    echo "xcbox: no gateway log yet at $XCBOX_HOME/gateway.log"
+  local follow=0 lines="${XCBOX_LOG_LINES:-50}" log="$XCBOX_HOME/gateway.log"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -f|--follow) follow=1; shift ;;
+      -n|--lines)
+        [ "$#" -ge 2 ] || { echo "xcbox: $1 requires a line count" >&2; return 2; }
+        lines="$2"; shift 2 ;;
+      --lines=*) lines="${1#*=}"; shift ;;
+      --) shift; [ "$#" -eq 0 ] || { echo "xcbox: unexpected logs argument '$1'" >&2; return 2; } ;;
+      *) echo "xcbox: unknown logs option '$1' (use -f or --lines N)" >&2; return 2 ;;
+    esac
+  done
+  case "$lines" in ''|*[!0-9]*) echo "xcbox: log line count must be a positive integer" >&2; return 2 ;; esac
+  [ "$lines" -gt 0 ] || { echo "xcbox: log line count must be a positive integer" >&2; return 2; }
+  if [ -L "$log" ]; then
+    echo "xcbox: refusing symlinked gateway log at $log" >&2
+    return 1
   fi
+  if [ ! -f "$log" ]; then
+    echo "xcbox: no gateway log yet at $log"
+    return 0
+  fi
+  if [ "$follow" = 1 ]; then
+    exec tail -n "$lines" -f "$log"
+  fi
+  tail -n "$lines" "$log"
 }
 
 cmd_list() {
