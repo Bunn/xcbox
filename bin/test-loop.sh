@@ -4,6 +4,8 @@ set -euo pipefail
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$DIR/xcbox-lib.sh"
 TEST_BOX_HOME_ROOT=$(mktemp -d)
+# Read dynamically by box_home_dir from the sourced helper library.
+# shellcheck disable=SC2034
 XCBOX_BOX_HOME_ROOT="$TEST_BOX_HOME_ROOT"
 
 # AUTO_TMP_ROOT is set only when we mint our own tmp dir (DEMO_DIR unset).

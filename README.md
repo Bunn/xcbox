@@ -184,6 +184,7 @@ subdirectory of the repo. You still start in your project directory inside the b
 Standalone bash scripts, run directly:
 
 ```bash
+bin/test-ci.sh            # syntax + ShellCheck + all Linux-safe tests (also runs in GitHub Actions)
 bin/test-guard.sh
 bin/test-lib.sh
 bin/test-project-identity.sh
@@ -197,6 +198,9 @@ bin/test-gateway.sh          # starts the gateway; verifies a real MCP session
 bin/test-gateway-lifecycle.sh # isolated start → stop → restart lifecycle regression
 bin/test-loop.sh             # full end-to-end: generate a throwaway app → build + test through the sandbox
 ```
+
+GitHub Actions runs `bin/test-ci.sh` on every push and pull request using a read-only token. The
+Apple container/Xcode gateway and full iOS build/test loop remain local macOS checks.
 
 ## Updating the gateway runtime
 

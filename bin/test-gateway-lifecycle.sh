@@ -40,8 +40,12 @@ stop_gateway
 # A process that stays alive but never opens the health endpoint must be killed
 # when startup times out, with no ownership metadata left behind.
 TIMEOUT_PID_FILE="$TEST_HOME/timeout.pid"
+# Read dynamically by ensure_gateway from the sourced helper library.
+# shellcheck disable=SC2034
 GATEWAY_START_ATTEMPTS=2
+# shellcheck disable=SC2034
 GATEWAY_START_DELAY=0.1
+# shellcheck disable=SC2034
 GATEWAY_CMD="node -e 'require(\"node:fs\").writeFileSync(\"$TIMEOUT_PID_FILE\",String(process.pid)); setInterval(()=>{},1000)' xcbox-lifecycle-gateway"
 if ensure_gateway; then echo "FAIL: gateway without a listener did not time out"; exit 1; fi
 TIMEOUT_PID=$(cat "$TIMEOUT_PID_FILE")

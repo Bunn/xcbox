@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # xcbox shared helpers. Source this; do not execute.
 # Values confirmed by the Task 1 spike:
 XCBOX_LIB_DIR=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
@@ -70,13 +71,13 @@ runtime_ready() {
 }
 
 ensure_runtime() {
-  local install_lock="$XCBOX_HOME/runtime-install.lock" acquired="" expected i lock_pid
+  local install_lock="$XCBOX_HOME/runtime-install.lock" acquired="" expected attempt lock_pid
   runtime_ready && return 0
   node_supported || { echo "ERROR: Node.js 20+ is required to install the gateway runtime." >&2; return 1; }
   command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install the gateway runtime." >&2; return 1; }
   mkdir -p "$XCBOX_HOME"
 
-  for i in $(seq 1 120); do
+  for ((attempt=1; attempt<=120; attempt++)); do
     if mkdir "$install_lock" 2>/dev/null; then acquired=1; break; fi
     runtime_ready && return 0
     lock_pid=$(cat "$install_lock/pid" 2>/dev/null || true)
@@ -354,7 +355,7 @@ cleanup_gateway_start() {
 }
 
 stop_gateway() {
-  local pid launcher_pid listener_pid i
+  local pid launcher_pid listener_pid attempt
   pid=$(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null || true)
 
   if [ -z "$pid" ]; then
@@ -391,7 +392,7 @@ stop_gateway() {
   # one-shot callers). In normal CLI use it is not our child, so wait is a no-op.
   wait "$pid" 2>/dev/null || true
 
-  for i in $(seq 1 50); do
+  for ((attempt=1; attempt<=50; attempt++)); do
     listener_pid=$(gateway_listener_pid 2>/dev/null || true)
     [ -z "$listener_pid" ] && break
     sleep 0.1
@@ -403,7 +404,7 @@ stop_gateway() {
   fi
 
   launcher_pid=$(cat "$XCBOX_HOME/gateway.launcher.pid" 2>/dev/null || true)
-  for i in $(seq 1 20); do
+  for ((attempt=1; attempt<=20; attempt++)); do
     gateway_launcher_is_ours "$launcher_pid" || break
     sleep 0.1
   done
@@ -413,7 +414,7 @@ stop_gateway() {
       return 1
     }
     wait "$launcher_pid" 2>/dev/null || true
-    for i in $(seq 1 20); do
+    for ((attempt=1; attempt<=20; attempt++)); do
       gateway_launcher_is_ours "$launcher_pid" || break
       sleep 0.1
     done
@@ -470,8 +471,8 @@ EOF
     sh -c "exec $GATEWAY_CMD" >>"$XCBOX_HOME/gateway.log" 2>&1 &
   launcher_pid=$!
   printf '%s\n' "$launcher_pid" > "$XCBOX_HOME/gateway.launcher.pid"
-  local i
-  for i in $(seq 1 "$GATEWAY_START_ATTEMPTS"); do
+  local attempt
+  for ((attempt=1; attempt<=GATEWAY_START_ATTEMPTS; attempt++)); do
     if ! kill -0 "$launcher_pid" 2>/dev/null; then
       echo "ERROR: gateway exited early; see $XCBOX_HOME/gateway.log" >&2
       sed -n '1,20p' "$XCBOX_HOME/gateway.log" >&2 || true
