@@ -5,6 +5,7 @@ XCBOX_LIB_DIR=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 XCBOX_ROOT="${XCBOX_RUNTIME_ROOT:-$(cd -P "$XCBOX_LIB_DIR/.." >/dev/null 2>&1 && pwd)}"
 XCBOX_HOME="${XCBOX_HOME:-$HOME/.xcbox-home}"
 XCBOX_BOX_HOME_ROOT="${XCBOX_BOX_HOME_ROOT:-$XCBOX_HOME/boxes}"
+XCBOX_PROJECT_METADATA_ROOT="${XCBOX_PROJECT_METADATA_ROOT:-$XCBOX_HOME/projects}"
 GATEWAY_PORT="${GATEWAY_PORT:-8765}"
 MCP_ENDPOINT="${MCP_ENDPOINT:-/mcp}"
 # Keep the unauthenticated gateway off physical network interfaces. Apple
@@ -533,6 +534,32 @@ box_home_dir() {
   printf '%s/%s\n' "$XCBOX_BOX_HOME_ROOT" "$1"
 }
 
+project_metadata_file() {
+  case "$1" in ''|*/*|.|..) return 1 ;; esac
+  printf '%s/%s\n' "$XCBOX_PROJECT_METADATA_ROOT" "$1"
+}
+
+record_box_project() {
+  local name="$1" project="$2" root file tmp
+  project=$(canonical_path "$project") || return 1
+  file=$(project_metadata_file "$name") || return 1
+  if [ -L "$XCBOX_PROJECT_METADATA_ROOT" ] || { [ -e "$XCBOX_PROJECT_METADATA_ROOT" ] && [ ! -d "$XCBOX_PROJECT_METADATA_ROOT" ]; }; then
+    echo "ERROR: refusing unsafe project metadata path $XCBOX_PROJECT_METADATA_ROOT." >&2
+    return 1
+  fi
+  mkdir -p "$XCBOX_PROJECT_METADATA_ROOT"
+  root=$(canonical_path "$XCBOX_PROJECT_METADATA_ROOT") || return 1
+  [ "$(canonical_path "$(dirname "$file")")" = "$root" ] || return 1
+  if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
+    echo "ERROR: refusing unsafe project metadata file $file." >&2
+    return 1
+  fi
+  tmp=$(mktemp "$root/.${name}.XXXXXX") || return 1
+  if ! printf '%s\n' "$project" > "$tmp"; then rm -f "$tmp"; return 1; fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$file"
+}
+
 # Choose the freshest copy without sharing the mutable file between boxes.
 # This keeps login portable to a newly created box while avoiding concurrent
 # agents writing the same Claude state.
@@ -648,18 +675,21 @@ EOF
 }
 
 ensure_box() {
-  local name="$1" proj="$2" home
+  local name="$1" mount_root="$2" project="${3:-$2}" home
+  project=$(canonical_path "$project") || return 1
   mkdir -p "$XCBOX_HOME"
   if box_exists "$name" && ! box_home_isolated "$name"; then
     print_box_home_migration "$name"
     return 1
   fi
   ensure_box_home "$name"
+  record_box_project "$name" "$project" \
+    || echo "WARNING: could not record project metadata for '$name'; list output may be incomplete." >&2
   home=$(box_home_dir "$name")
   if ! box_exists "$name"; then
-    echo "==> creating sandbox '$name' (project-only: $proj)"
+    echo "==> creating sandbox '$name' (project-only: $mount_root)"
     container run -d --name "$name" --ssh \
-      -v "$proj:$proj" -v "$home:/root" -w "$proj" \
+      -v "$mount_root:$mount_root" -v "$home:/root" -w "$project" \
       "$XCBOX_IMAGE" sleep infinity >/dev/null
   elif ! box_running "$name"; then
     echo "==> starting sandbox '$name'"; container start "$name" >/dev/null

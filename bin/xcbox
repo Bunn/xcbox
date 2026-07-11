@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # xcbox — run a sandboxed coding agent on the Xcode/Swift project in the current
 # directory. The agent sees ONLY this project; it builds/tests on the host via
-# XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|status|stop|logs|rm|doctor]
+# XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|list|status|stop|logs|rm|doctor]
 set -euo pipefail
 
 # Resolve through symlinks so `xcbox` works when installed as a symlink on PATH
@@ -23,6 +23,7 @@ Usage: xcbox [command]
 
 Commands:
   up        (default) bring up gateway + project sandbox and enter it
+  list      list all xcbox containers and retained project homes
   status    show gateway/box/agent/MCP state for this project
   stop      stop this project's box (add --gateway to also stop the gateway)
   logs      tail the build gateway log
@@ -51,7 +52,7 @@ cmd_up() {
   ensure_container_gateway_route
   ensure_gateway
   # 3. Project sandbox (mounts the repo root; box keyed to $proj) + provisioning.
-  ensure_box "$name" "$mount_root"
+  ensure_box "$name" "$mount_root" "$proj"
   carry_git_identity "$name"
   ensure_agent "$name"
   register_mcp "$name"
@@ -178,6 +179,18 @@ cmd_logs() {
   fi
 }
 
+cmd_list() {
+  local inventory
+  [ "$#" -eq 0 ] || { echo "xcbox: list takes no arguments" >&2; return 2; }
+  node_supported || { echo "xcbox: Node.js 20+ is required to read container inventory" >&2; return 1; }
+  command -v container >/dev/null 2>&1 || { echo "xcbox: Apple container CLI is not installed" >&2; return 1; }
+  if ! inventory=$(container ls -a --format json 2>/dev/null); then
+    echo "xcbox: container daemon is unavailable — run 'container system start'" >&2
+    return 1
+  fi
+  printf '%s\n' "$inventory" | node "$DIR/xcbox-list.mjs" "$XCBOX_HOME" "$XCBOX_BOX_HOME_ROOT" "$XCBOX_PROJECT_METADATA_ROOT"
+}
+
 cmd_stop() {
   local requested proj name
   requested="${PROJECT:-$(pwd)}"
@@ -214,6 +227,7 @@ main() {
   local cmd="${1:-up}"; shift || true
   case "$cmd" in
     up)      cmd_up "$@" ;;
+    list)    cmd_list "$@" ;;
     doctor)  cmd_doctor "$@" ;;
     status)  cmd_status "$@" ;;
     stop)    cmd_stop "$@" ;;

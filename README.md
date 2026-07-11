@@ -106,6 +106,7 @@ and do not contact npm unless the lock changes.
 | Command | Description |
 | --- | --- |
 | `xcbox` · `xcbox up` | bring up the gateway + repo sandbox and enter it |
+| `xcbox list` | list every box, project path, state, home status, and retained home |
 | `xcbox status` | verify host + box gateway, real MCP, agent, and forwarded SSH state |
 | `xcbox stop` | stop this project's box (`--gateway` also stops the gateway) |
 | `xcbox logs` | tail the build gateway log |
@@ -116,6 +117,9 @@ Each box gets an independent home under `~/.xcbox-home/boxes/<box-name>`. Its lo
 Claude sessions, npm cache, and Git configuration persist across runs without being writable by
 other boxes. A new home copies the freshest existing Claude login and user preferences once; it does
 not copy project history or caches. `xcbox rm` removes the container but retains that home.
+
+`xcbox list` works from any directory. It includes running and stopped containers, warns about
+legacy/shared or mismatched `/root` mounts, and shows retained per-project homes after `xcbox rm`.
 
 Boxes created by an older version may still mount all of `~/.xcbox-home` as `/root`. xcbox refuses
 to start those with shared state and asks you to stop/remove/recreate the container; the old home is
@@ -189,6 +193,7 @@ bin/test-guard.sh
 bin/test-lib.sh
 bin/test-project-identity.sh
 bin/test-box-home.sh
+bin/test-list.sh
 bin/test-status-probes.sh
 bin/test-dispatch.sh
 bin/test-doctor.sh

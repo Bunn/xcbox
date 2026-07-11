@@ -7,6 +7,7 @@ TEST_BOX_HOME_ROOT=$(mktemp -d)
 # Read dynamically by box_home_dir from the sourced helper library.
 # shellcheck disable=SC2034
 XCBOX_BOX_HOME_ROOT="$TEST_BOX_HOME_ROOT"
+XCBOX_PROJECT_METADATA_ROOT="$TEST_BOX_HOME_ROOT/project-index"
 
 # AUTO_TMP_ROOT is set only when we mint our own tmp dir (DEMO_DIR unset).
 # Teardown below removes exactly that root — never a caller-supplied DEMO_DIR's
@@ -89,6 +90,16 @@ EXPECTED_BOX_HOME=$(canonical_path "$(box_home_dir "$NAME")")
 ACTUAL_BOX_HOME=$(canonical_path "$(box_root_mount_source "$NAME")")
 [ "$ACTUAL_BOX_HOME" = "$EXPECTED_BOX_HOME" ] || { echo "FAIL: box /root is not the isolated project home"; exit 1; }
 echo "home OK: /root is isolated at $EXPECTED_BOX_HOME"
+LIST_OUTPUT=$(XCBOX_BOX_HOME_ROOT="$TEST_BOX_HOME_ROOT" XCBOX_PROJECT_METADATA_ROOT="$XCBOX_PROJECT_METADATA_ROOT" "$DIR/xcbox" list)
+EXPECTED_PROJECT=$(canonical_path "$DEMO")
+LIST_ROW=$(printf '%s\n' "$LIST_OUTPUT" | grep -F "$NAME" || true)
+if ! printf '%s\n' "$LIST_ROW" | grep -Eq '^running +isolated +' \
+  || ! printf '%s\n' "$LIST_ROW" | grep -Fq "$EXPECTED_PROJECT"; then
+  echo "FAIL: list did not report the running demo box"
+  echo "$LIST_OUTPUT"
+  exit 1
+fi
+echo "list OK: running box maps to its project and isolated home"
 STATUS_OUTPUT=$(PROJECT="$DEMO" XCBOX_BOX_HOME_ROOT="$TEST_BOX_HOME_ROOT" "$DIR/xcbox" status)
 printf '%s\n' "$STATUS_OUTPUT" | grep -q 'OK   box can reach host gateway' \
   || { echo "FAIL: status did not verify the gateway from inside the box"; echo "$STATUS_OUTPUT"; exit 1; }

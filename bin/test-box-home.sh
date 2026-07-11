@@ -77,6 +77,7 @@ ensure_box xcbox-new "$PROJECT" >/dev/null
 NEW_HOME=$(box_home_dir xcbox-new)
 grep -Fxq "$NEW_HOME:/root" "$CAPTURE" || fail "new box did not mount its isolated home"
 if grep -Fxq "$XCBOX_HOME:/root" "$CAPTURE"; then fail "new box mounted shared global state"; fi
+[ "$(cat "$XCBOX_PROJECT_METADATA_ROOT/xcbox-new")" = "$(canonical_path "$PROJECT")" ] || fail "project metadata was not recorded"
 unset -f container box_exists
 
 # A legacy/shared agent could have left a symlink under boxes/. Never follow it
