@@ -129,6 +129,8 @@ and do not contact npm unless the lock changes.
 | `xcbox stop` | stop this project's box (`--gateway` also stops the gateway) |
 | `xcbox logs` | tail the gateway log (`-f` follows; `--lines N` controls history) |
 | `xcbox rm` | remove this project's box (keeps `~/.xcbox-home`) |
+| `xcbox reset` | preview removal of this project's box, retained home, and saved agent; `--yes` applies it |
+| `xcbox prune` | preview stopped artifacts for deleted projects; `--yes` removes them |
 | `xcbox doctor` | check host prerequisites |
 
 Each box gets an independent home under `~/.xcbox-home/boxes/<box-name>`. Its Claude and Codex logins,
@@ -142,6 +144,11 @@ legacy/shared or mismatched `/root` mounts, and shows retained per-project homes
 
 `xcbox logs -f` follows new gateway output until interrupted; Ctrl-C stops only the follower. Use
 `xcbox logs --lines N` (or `-n N`) to choose how much existing history is printed first.
+
+Cleanup is deliberately opt-in. `xcbox reset` and `xcbox prune` are dry runs unless `--yes` is
+provided. Reset never touches the source repository or shared gateway. Prune removes only stopped
+containers, isolated homes, and metadata whose recorded project path no longer exists; running boxes
+are reported and skipped.
 
 Boxes created by an older version may still mount all of `~/.xcbox-home` as `/root`. xcbox refuses
 to start those with shared state and asks you to stop/remove/recreate the container; the old home is
@@ -224,6 +231,7 @@ bin/test-project-identity.sh
 bin/test-box-home.sh
 bin/test-agents.sh           # selection memory + Claude/Codex install and MCP wiring
 bin/test-list.sh
+bin/test-cleanup.sh          # reset/prune dry runs, deletion scope, running-box protection
 bin/test-logs.sh
 bin/test-status-probes.sh
 bin/test-dispatch.sh

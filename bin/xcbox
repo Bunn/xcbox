@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # xcbox — run a sandboxed coding agent on the Xcode/Swift project in the current
 # directory. The agent sees ONLY this project; it builds/tests on the host via
-# XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|list|status|stop|logs|rm|doctor]
+# XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|list|status|stop|logs|rm|reset|prune|doctor]
 set -euo pipefail
 
 # Resolve through symlinks so `xcbox` works when installed as a symlink on PATH
@@ -28,6 +28,8 @@ Commands:
   stop      stop this project's box (add --gateway to also stop the gateway)
   logs      tail the build gateway log (-f follows; --lines N controls history)
   rm        remove this project's box (keeps ~/.xcbox-home)
+  reset     remove this project's box, retained home, and saved selection
+  prune     remove stopped artifacts whose recorded project no longer exists
   doctor    check host prerequisites
   help      show this help
 
@@ -287,6 +289,79 @@ cmd_rm() {
   else echo "xcbox: no box '$name' to remove"; fi
 }
 
+cmd_reset() {
+  local yes=0 requested proj name home project_file agent_file
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --yes|-y) yes=1; shift ;;
+      *) echo "xcbox: unknown reset option '$1' (use --yes to confirm)" >&2; return 2 ;;
+    esac
+  done
+  requested="${PROJECT:-$(pwd)}"
+  proj=$(project_context_dir "$requested") || return
+  name=$(sanitize_name "$proj")
+  if legacy_box_detected "$proj" "$name"; then
+    print_legacy_box_migration "$proj" "$name"
+    return 1
+  fi
+  home=$(box_home_dir "$name") || return
+  project_file=$(project_metadata_file "$name") || return
+  agent_file=$(agent_metadata_file "$name") || return
+
+  echo "xcbox reset — $proj"
+  echo "  box:      $name"
+  echo "  home:     $home"
+  echo "  metadata: $project_file and $agent_file"
+  echo "  source repository and shared gateway will not be changed"
+  if [ "$yes" != 1 ]; then
+    echo "dry run only; rerun with 'xcbox reset --yes' to remove these artifacts"
+    return 0
+  fi
+  remove_box_artifacts "$name" 1
+  echo "xcbox: reset complete for $proj"
+}
+
+cmd_prune() {
+  local yes=0 inventory plan action name artifacts project removed=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --yes|-y) yes=1; shift ;;
+      *) echo "xcbox: unknown prune option '$1' (use --yes to confirm)" >&2; return 2 ;;
+    esac
+  done
+  node_supported || { echo "xcbox: Node.js 20+ is required to inspect cleanup candidates" >&2; return 1; }
+  command -v container >/dev/null 2>&1 || { echo "xcbox: Apple container CLI is not installed" >&2; return 1; }
+  if ! inventory=$(container ls -a --format json 2>/dev/null); then
+    echo "xcbox: container daemon is unavailable — run 'container system start'" >&2
+    return 1
+  fi
+  plan=$(printf '%s\n' "$inventory" | node "$DIR/xcbox-cleanup.mjs" "$XCBOX_BOX_HOME_ROOT" "$XCBOX_PROJECT_METADATA_ROOT") || return
+  if [ -z "$plan" ]; then
+    echo "xcbox: no stale boxes or retained homes found"
+    return 0
+  fi
+
+  echo "xcbox prune — projects whose recorded paths no longer exist:"
+  while IFS=$'\t' read -r action name artifacts project; do
+    if [ "$action" = SKIP ]; then
+      echo "  SKIP   $name ($artifacts) — still running; missing project: $project"
+    else
+      echo "  REMOVE $name ($artifacts) — missing project: $project"
+    fi
+  done <<< "$plan"
+  if [ "$yes" != 1 ]; then
+    echo "dry run only; rerun with 'xcbox prune --yes' to remove the REMOVE entries"
+    return 0
+  fi
+  while IFS=$'\t' read -r action name artifacts project; do
+    [ "$action" = REMOVE ] || continue
+    echo "==> pruning '$name'"
+    remove_box_artifacts "$name" 0
+    removed=$((removed + 1))
+  done <<< "$plan"
+  echo "xcbox: pruned $removed stale project(s); running boxes were left untouched"
+}
+
 main() {
   local cmd="${1:-up}"; shift || true
   case "$cmd" in
@@ -298,6 +373,8 @@ main() {
     stop)    cmd_stop "$@" ;;
     logs)    cmd_logs "$@" ;;
     rm)      cmd_rm "$@" ;;
+    reset)   cmd_reset "$@" ;;
+    prune)   cmd_prune "$@" ;;
     help|-h|--help) usage ;;
     *)       echo "xcbox: unknown command '$cmd'" >&2; usage; exit 2 ;;
   esac

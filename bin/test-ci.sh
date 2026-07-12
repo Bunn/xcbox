@@ -25,6 +25,7 @@ for test in \
   test-agents.sh \
   test-git-signing.sh \
   test-list.sh \
+  test-cleanup.sh \
   test-logs.sh \
   test-status-probes.sh \
   test-dispatch.sh \

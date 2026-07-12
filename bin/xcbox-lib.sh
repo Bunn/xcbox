@@ -675,6 +675,54 @@ record_box_agent() {
   mv -f "$tmp" "$file"
 }
 
+remove_box_metadata() {
+  local name="$1" root project_file agent_file
+  project_file=$(project_metadata_file "$name") || return 1
+  agent_file=$(agent_metadata_file "$name") || return 1
+  [ -e "$XCBOX_PROJECT_METADATA_ROOT" ] || return 0
+  if [ -L "$XCBOX_PROJECT_METADATA_ROOT" ] || [ ! -d "$XCBOX_PROJECT_METADATA_ROOT" ]; then
+    echo "ERROR: refusing unsafe project metadata path $XCBOX_PROJECT_METADATA_ROOT." >&2
+    return 1
+  fi
+  root=$(canonical_path "$XCBOX_PROJECT_METADATA_ROOT") || return 1
+  [ "$(canonical_path "$(dirname "$project_file")")" = "$root" ] || return 1
+  rm -f -- "$project_file" "$agent_file"
+}
+
+remove_box_home() {
+  local name="$1" home root parent
+  home=$(box_home_dir "$name") || return 1
+  [ -e "$home" ] || [ -L "$home" ] || return 0
+  if [ -L "$XCBOX_BOX_HOME_ROOT" ] || [ ! -d "$XCBOX_BOX_HOME_ROOT" ]; then
+    echo "ERROR: refusing unsafe box-home root $XCBOX_BOX_HOME_ROOT." >&2
+    return 1
+  fi
+  if [ -L "$home" ] || [ ! -d "$home" ]; then
+    echo "ERROR: refusing unsafe box home $home." >&2
+    return 1
+  fi
+  root=$(canonical_path "$XCBOX_BOX_HOME_ROOT") || return 1
+  parent=$(canonical_path "$(dirname "$home")") || return 1
+  [ "$parent" = "$root" ] || { echo "ERROR: box home escapes $root." >&2; return 1; }
+  rm -rf -- "$home"
+}
+
+remove_box_artifacts() {
+  local name="$1" stop_running="${2:-0}"
+  if box_running "$name"; then
+    if [ "$stop_running" != 1 ]; then
+      echo "xcbox: refusing to prune running box '$name'" >&2
+      return 1
+    fi
+    container stop "$name" >/dev/null
+  fi
+  if box_exists "$name"; then
+    container rm "$name" >/dev/null
+  fi
+  remove_box_home "$name"
+  remove_box_metadata "$name"
+}
+
 prompt_agent() {
   local answer
   printf '%s\n' 'Choose the coding agent for this project:' '  1) Claude Code' '  2) Codex' >&2

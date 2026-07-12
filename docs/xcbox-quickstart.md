@@ -57,6 +57,8 @@ xcbox logs              # tail the gateway log (-f follows; --lines N controls h
 xcbox stop              # stop this project's box
 xcbox stop --gateway    # also stop the host gateway
 xcbox rm                # remove this project's box (keeps ~/.xcbox-home)
+xcbox reset             # preview full project-state reset; add --yes to apply
+xcbox prune             # preview stopped artifacts for deleted projects; add --yes to apply
 ```
 
 ## Manual end-to-end confirmation (the Phase 1 "it's a thing" proof)

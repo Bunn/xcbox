@@ -5,7 +5,7 @@ XCBOX="$DIR/xcbox"
 
 # help lists the subcommands
 "$XCBOX" help 2>&1 | grep -q "up" || { echo "FAIL: help missing 'up'"; exit 1; }
-for c in list status stop logs rm doctor; do
+for c in list status stop logs rm reset prune doctor; do
   "$XCBOX" help 2>&1 | grep -q "$c" || { echo "FAIL: help missing '$c'"; exit 1; }
 done
 
