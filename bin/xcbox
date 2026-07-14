@@ -85,7 +85,7 @@ cmd_up() {
     codex) echo "    selected Codex; run 'codex' and sign in only if prompted." ;;
   esac
   echo "    Then ask it to build/test the app."
-  exec container exec -it -w "$proj" -e PATH="$INNER_PATH" "$name" bash
+  enter_box "$name" "$proj"
 }
 
 _ok()   { echo "  OK   $1"; }

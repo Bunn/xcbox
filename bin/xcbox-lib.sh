@@ -309,6 +309,36 @@ INNER_PATH="${INNER_PATH:-/root/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/
 CLAUDE_AGENT_INSTALL="${XCBOX_CLAUDE_INSTALL:-${XCBOX_AGENT_INSTALL:-@anthropic-ai/claude-code@2.1.207}}"
 CODEX_AGENT_INSTALL="${XCBOX_CODEX_INSTALL:-${XCBOX_AGENT_INSTALL:-@openai/codex@0.144.1}}"
 
+# Apple container assigns TERM=xterm to an interactive process unless the
+# caller overrides it. Preserve the real host terminal capabilities so TUIs do
+# not unnecessarily fall back to the basic ANSI palette. A TTY-less caller can
+# report TERM=dumb even though cmd_up ultimately attaches an interactive PTY;
+# use the portable 256-color entry in that case.
+host_terminal_type() {
+  case "${TERM:-}" in
+    ''|dumb|unknown) printf 'xterm-256color\n' ;;
+    *) printf '%s\n' "$TERM" ;;
+  esac
+}
+
+enter_box() {
+  local name="$1" project="$2" variable value
+  local -a environment=(
+    -e "PATH=$INNER_PATH"
+    -e "TERM=$(host_terminal_type)"
+  )
+
+  # COLORTERM carries true-color support in terminals that advertise it.
+  # TERM_PROGRAM metadata lets terminal-aware TUIs select the right macOS
+  # behavior and user guidance without exposing unrelated host environment.
+  for variable in COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION; do
+    value="${!variable-}"
+    [ -z "$value" ] || environment+=(-e "$variable=$value")
+  done
+
+  exec container exec -it -w "$project" "${environment[@]}" "$name" bash
+}
+
 gateway_alive() {
   local pid
   pid=$(cat "$XCBOX_HOME/gateway.pid" 2>/dev/null) || return 1

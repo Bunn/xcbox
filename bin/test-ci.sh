@@ -31,6 +31,7 @@ for test in \
   test-dispatch.sh \
   test-doctor.sh \
   test-subcommands.sh \
+  test-terminal.sh \
   test-runtime.sh
 do
   "$DIR/$test"

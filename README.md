@@ -214,6 +214,18 @@ Nothing — it keeps running in the background so the next `xcbox` is instant. U
 stop it, `xcbox stop --gateway` to also stop the shared gateway, or `xcbox rm` to delete the box
 (your agent login in `~/.xcbox-home` survives either way).
 
+### Why do colors or text selection differ in Claude's fullscreen TUI?
+
+xcbox passes the host's `TERM`, `COLORTERM`, and terminal identity into the interactive box shell,
+so a new session uses all of the colors advertised by Terminal.app or another host terminal. Exit
+and re-enter xcbox after updating to pick up that environment.
+
+Claude's fullscreen renderer deliberately captures mouse events and draws in the terminal's alternate
+screen buffer. In Terminal.app, hold `Fn` while clicking and dragging to bypass that capture and make
+a native selection, then use `Cmd+C`. To keep fullscreen rendering but always leave selection to the
+terminal, start it as `CLAUDE_CODE_DISABLE_MOUSE=1 claude`; keyboard scrolling still works, but mouse
+scrolling and clickable TUI elements do not. `/tui default` switches back to Claude's classic renderer.
+
 ### Why does it mount my whole repo instead of just the Xcode project folder?
 
 So `.git` comes along and the agent can commit and push — even when the `.xcodeproj` lives in a
@@ -237,6 +249,7 @@ bin/test-status-probes.sh
 bin/test-dispatch.sh
 bin/test-doctor.sh
 bin/test-subcommands.sh
+bin/test-terminal.sh          # terminal capability forwarding into interactive shells
 bin/test-runtime.sh          # locked install detection + offline reuse + lock refresh
 bin/test-agents-container.sh # real throwaway Apple container: install/wire both agents
 bin/test-git-signing.sh      # SSH signing config + safety/diagnostic unit coverage
