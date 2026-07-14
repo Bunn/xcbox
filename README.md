@@ -220,23 +220,6 @@ xcbox passes the host's `TERM`, `COLORTERM`, and terminal identity into the inte
 so a new session uses all of the colors advertised by Terminal.app or another host terminal. Exit
 and re-enter xcbox after updating to pick up that environment.
 
-Claude's fullscreen renderer deliberately captures mouse events and draws in the terminal's alternate
-screen buffer. In Terminal.app, hold `Fn` while clicking and dragging to bypass that capture and make
-a native selection, then use `Cmd+C`. To keep fullscreen rendering but always leave selection to the
-terminal, start it as `CLAUDE_CODE_DISABLE_MOUSE=1 claude`; keyboard scrolling still works, but mouse
-scrolling and clickable TUI elements do not. `/tui default` switches back to Claude's classic renderer.
-
-### Can Claude run without permission prompts inside xcbox?
-
-Yes. xcbox marks its interactive shell as a deliberate sandbox, so Claude permits
-`claude --dangerously-skip-permissions` even though the container process runs as root. This bypasses
-Claude's tool confirmations, not xcbox's container boundary.
-
-It is still dangerous: the agent can change the mounted repository, use the forwarded SSH agent,
-call the host build gateway, and access the network. Use it only with repositories and instructions
-you trust; xcbox limits filesystem blast radius but does not prevent data exfiltration or malicious
-build scripts.
-
 ### Why does it mount my whole repo instead of just the Xcode project folder?
 
 So `.git` comes along and the agent can commit and push — even when the `.xcodeproj` lives in a
