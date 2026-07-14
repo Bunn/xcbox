@@ -326,6 +326,9 @@ enter_box() {
   local -a environment=(
     -e "PATH=$INNER_PATH"
     -e "TERM=$(host_terminal_type)"
+    # Claude rejects bypass-permissions mode as root unless its process is in
+    # a deliberate sandbox. xcbox is exactly that: a project-scoped container.
+    -e "IS_SANDBOX=1"
   )
 
   # COLORTERM carries true-color support in terminals that advertise it.

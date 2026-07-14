@@ -34,6 +34,8 @@ PATH=$INNER_PATH
 -e
 TERM=xterm-256color
 -e
+IS_SANDBOX=1
+-e
 COLORTERM=truecolor
 -e
 TERM_PROGRAM=Apple_Terminal
@@ -45,4 +47,4 @@ EOF
 cmp -s "$T/expected" "$XCBOX_CAPTURE" \
   || { echo "FAIL: container entry did not preserve the terminal environment"; diff -u "$T/expected" "$XCBOX_CAPTURE"; exit 1; }
 
-echo "terminal OK: interactive shell preserves host color and terminal capabilities"
+echo "entry environment OK: terminal capabilities and deliberate sandbox marker preserved"

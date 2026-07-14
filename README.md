@@ -226,6 +226,17 @@ a native selection, then use `Cmd+C`. To keep fullscreen rendering but always le
 terminal, start it as `CLAUDE_CODE_DISABLE_MOUSE=1 claude`; keyboard scrolling still works, but mouse
 scrolling and clickable TUI elements do not. `/tui default` switches back to Claude's classic renderer.
 
+### Can Claude run without permission prompts inside xcbox?
+
+Yes. xcbox marks its interactive shell as a deliberate sandbox, so Claude permits
+`claude --dangerously-skip-permissions` even though the container process runs as root. This bypasses
+Claude's tool confirmations, not xcbox's container boundary.
+
+It is still dangerous: the agent can change the mounted repository, use the forwarded SSH agent,
+call the host build gateway, and access the network. Use it only with repositories and instructions
+you trust; xcbox limits filesystem blast radius but does not prevent data exfiltration or malicious
+build scripts.
+
 ### Why does it mount my whole repo instead of just the Xcode project folder?
 
 So `.git` comes along and the agent can commit and push — even when the `.xcodeproj` lives in a
@@ -249,7 +260,7 @@ bin/test-status-probes.sh
 bin/test-dispatch.sh
 bin/test-doctor.sh
 bin/test-subcommands.sh
-bin/test-terminal.sh          # terminal capability forwarding into interactive shells
+bin/test-terminal.sh          # terminal capabilities + sandbox marker on interactive entry
 bin/test-runtime.sh          # locked install detection + offline reuse + lock refresh
 bin/test-agents-container.sh # real throwaway Apple container: install/wire both agents
 bin/test-git-signing.sh      # SSH signing config + safety/diagnostic unit coverage
