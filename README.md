@@ -40,7 +40,21 @@ Apple builds.
 
 ## Install
 
-Put `xcbox` on your `PATH` (symlinks `bin/xcbox` into a bin dir already on your `PATH`):
+Install xcbox and its Node.js and Apple container dependencies with Homebrew:
+
+```bash
+brew install Bunn/tap/xcbox
+```
+
+Then configure Apple container's localhost bridge once and verify your host:
+
+```bash
+sudo container system dns create host.container.internal --localhost 203.0.113.113
+xcbox doctor
+```
+
+To install directly from source instead, clone the repository and put `xcbox` on your `PATH`
+(the installer symlinks `bin/xcbox` into a bin directory already on your `PATH`):
 
 ```bash
 git clone git@github.com:Bunn/xcbox.git && cd xcbox
@@ -269,6 +283,16 @@ bin/test-gateway.sh
 
 Review and commit `package.json` and `package-lock.json` together. The next `xcbox up` detects the new
 lockfile hash and runs `npm ci`; unchanged installations continue using their existing local binaries.
+
+## Releasing
+
+xcbox releases use numeric Git tags that match `VERSION`. To publish a release:
+
+1. Update `VERSION`, run `bin/test-ci.sh`, commit, tag, and push the new version.
+2. Update `Formula/xcbox.rb` in [`Bunn/homebrew-tap`](https://github.com/Bunn/homebrew-tap) with the
+   new tag URL and source archive SHA-256.
+3. Run `brew audit --strict Bunn/tap/xcbox`, `brew style Bunn/tap/xcbox`, and
+   `brew test Bunn/tap/xcbox`, then push the tap update.
 
 ## Security model
 

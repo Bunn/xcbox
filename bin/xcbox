@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # xcbox — run a sandboxed coding agent on the Xcode/Swift project in the current
 # directory. The agent sees ONLY this project; it builds/tests on the host via
-# XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|list|status|stop|logs|rm|reset|prune|doctor]
+# XcodeBuildMCP. Usage: cd ~/MyApp && xcbox [up|list|status|stop|logs|rm|reset|prune|doctor|version]
 set -euo pipefail
 
 # Resolve through symlinks so `xcbox` works when installed as a symlink on PATH
@@ -31,12 +31,19 @@ Commands:
   reset     remove this project's box, retained home, and saved selection
   prune     remove stopped artifacts whose recorded project no longer exists
   doctor    check host prerequisites
+  version   print the installed xcbox version
   help      show this help
 
 Up options:
   --agent claude|codex  select and remember this project's agent
   --update              update the selected agent to its latest release
 EOF
+}
+
+cmd_version() {
+  [ "$#" -eq 0 ] || { echo "xcbox: version takes no arguments" >&2; return 2; }
+  [ -r "$XCBOX_ROOT/VERSION" ] || { echo "xcbox: installed version metadata is missing" >&2; return 1; }
+  cat "$XCBOX_ROOT/VERSION"
 }
 
 cmd_up() {
@@ -375,6 +382,7 @@ main() {
     rm)      cmd_rm "$@" ;;
     reset)   cmd_reset "$@" ;;
     prune)   cmd_prune "$@" ;;
+    version|-V|--version) cmd_version "$@" ;;
     help|-h|--help) usage ;;
     *)       echo "xcbox: unknown command '$cmd'" >&2; usage; exit 2 ;;
   esac
